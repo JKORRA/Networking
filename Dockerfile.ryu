@@ -1,0 +1,9 @@
+FROM python:3.9-slim
+
+# Downgrade setuptools to a version that still has easy_install.get_script_args
+RUN pip install --no-cache-dir "setuptools<58.0" "wheel"
+
+# Now install ryu with a compatible eventlet
+RUN pip install --no-cache-dir eventlet==0.30.2 ryu
+
+WORKDIR /app
