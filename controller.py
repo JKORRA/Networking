@@ -11,6 +11,9 @@ from ryu.app.wsgi import ControllerBase, WSGIApplication, route
 from webob import Response
 import json
 import time
+import os
+import logging
+logging.getLogger('eventlet.wsgi.server').setLevel(logging.WARNING)
 
 api_instance_name = 'api_app'
 
@@ -34,11 +37,16 @@ class NetworkController(app_manager.RyuApp):
         self.flow_matrix = {} # To store real-time traffic matrix (Source IP -> Dest IP : Mbps)
         
         self.mac_to_port = {} # MAC to port mapping for each switch
+        self.mac_to_port_ts = {} # Timestamp for mac_to_port entries (dpid -> mac -> time)
+        self.mac_to_ip_ts = {} # Timestamp for mac_to_ip entries (mac -> time)
         
         self.datapaths = {} # Track datapaths
         
         self.mac_to_ip = {} # Learn IP from any packet (ARP or IPv4)
         
+        self._topo_update_scheduled = False
+        self._topo_update_timer = None
+
         # Register REST API
         wsgi = kwargs['wsgi']
         wsgi.register(
@@ -92,7 +100,7 @@ class NetworkController(app_manager.RyuApp):
             
             self.logger.info("Switch datapath id %s configured successfully", datapath.id)
             
-            self.update_topology() # Trigger topology update
+            self._schedule_topology_update() # Trigger topology update
         except Exception as e:
             self.logger.error("Error in switch_features_handler: %s", e)
             self.logger.exception(e)
@@ -148,14 +156,17 @@ class NetworkController(app_manager.RyuApp):
             self.mac_to_port.setdefault(dpid, {})
             
             self.mac_to_port[dpid][src] = in_port # Learn MAC address
+            self.mac_to_port_ts.setdefault(dpid, {})[src] = time.time()
             
             # Learn IP from ARP or IPv4 packets
-            arp_pkt_check = pkt.get_protocol(arp.arp)
+            arp_pkt = pkt.get_protocol(arp.arp)
             ip_pkt = pkt.get_protocol(ipv4_pkt.ipv4)
-            if arp_pkt_check is not None:
-                self.mac_to_ip[arp_pkt_check.src_mac] = arp_pkt_check.src_ip
+            if arp_pkt is not None:
+                self.mac_to_ip[arp_pkt.src_mac] = arp_pkt.src_ip
+                self.mac_to_ip_ts[arp_pkt.src_mac] = time.time()
             elif ip_pkt is not None:
                 self.mac_to_ip[src] = ip_pkt.src
+                self.mac_to_ip_ts[src] = time.time()
             
             if dst in self.mac_to_port[dpid]:
                 out_port = self.mac_to_port[dpid][dst]
@@ -165,7 +176,6 @@ class NetworkController(app_manager.RyuApp):
             actions = [parser.OFPActionOutput(out_port)]
 
             # Always flood ARP (helps dynamic host addition)
-            arp_pkt = pkt.get_protocol(arp.arp)
             if arp_pkt is not None:
                 out_port = ofproto.OFPP_FLOOD
                 actions = [parser.OFPActionOutput(out_port)]
@@ -199,10 +209,20 @@ class NetworkController(app_manager.RyuApp):
         try:
             switch = ev.switch
             self.logger.info("Topology: Switch %s ENTERED", switch.dp.id)
-            self.update_topology()
+            self._schedule_topology_update()
         except Exception as e:
             self.logger.error("Error in switch_enter_handler: %s", e)
     
+    def _schedule_topology_update(self):
+        if self._topo_update_scheduled:
+            return
+        self._topo_update_scheduled = True
+        self._topo_update_timer = hub.spawn_after(0.5, self._do_update_topology)
+
+    def _do_update_topology(self):
+        self._topo_update_scheduled = False
+        self.update_topology()
+
     def _monitor(self): # Request port stats and refresh host IPs periodically
         while True:
             # Optionally clear inactive flows
@@ -210,6 +230,21 @@ class NetworkController(app_manager.RyuApp):
             for dp in self.datapaths.values():
                 self._request_stats(dp)
             self._refresh_host_ips() # Supplement IPs without changing version
+
+            # Prune stale mac_to_port entries (older than 300s)
+            now = time.time()
+            for dpid in list(self.mac_to_port_ts.keys()):
+                stale = [mac for mac, ts in self.mac_to_port_ts[dpid].items() if now - ts > 300]
+                for mac in stale:
+                    del self.mac_to_port[dpid][mac]
+                    del self.mac_to_port_ts[dpid][mac]
+
+            # Prune stale mac_to_ip entries (older than 300s)
+            stale = [mac for mac, ts in self.mac_to_ip_ts.items() if now - ts > 300]
+            for mac in stale:
+                self.mac_to_ip.pop(mac, None)
+                self.mac_to_ip_ts.pop(mac, None)
+
             hub.sleep(5) # polling interval
             
     def _request_stats(self, datapath):
@@ -311,7 +346,7 @@ class NetworkController(app_manager.RyuApp):
                     self.mac_to_ip.pop(mac, None)
                 del self.mac_to_port[dpid]
             self.logger.warning("Topology: Switch %s LEFT", dpid)
-            self.update_topology()
+            self._schedule_topology_update()
         except Exception as e:
             self.logger.error("Error in switch_leave_handler: %s", e)
     
@@ -320,7 +355,7 @@ class NetworkController(app_manager.RyuApp):
         try:
             link = ev.link
             self.logger.info("Topology: Link ADDED s%s:%s -> s%s:%s", link.src.dpid, link.src.port_no, link.dst.dpid, link.dst.port_no)
-            self.update_topology()
+            self._schedule_topology_update()
         except Exception as e:
             self.logger.error("Error in link_add_handler: %s", e)
     
@@ -329,7 +364,7 @@ class NetworkController(app_manager.RyuApp):
         try:
             link = ev.link
             self.logger.warning("Topology: Link DELETED s%s:%s -> s%s:%s", link.src.dpid, link.src.port_no, link.dst.dpid, link.dst.port_no)
-            self.update_topology()
+            self._schedule_topology_update()
         except Exception as e:
             self.logger.error("Error in link_delete_handler: %s", e)
     
@@ -338,7 +373,7 @@ class NetworkController(app_manager.RyuApp):
         try:
             host = ev.host
             self.logger.info("Topology: Host ADDED %s at s%s:%s", host.mac, host.port.dpid, host.port.port_no)
-            self.update_topology()
+            self._schedule_topology_update()
         except Exception as e:
             self.logger.error("Error in host_add_handler: %s", e)
     
@@ -408,7 +443,7 @@ class NetworkAPI(ControllerBase): # REST API for topology exposure
     def __init__(self, req, link, data, **config):
         super(NetworkAPI, self).__init__(req, link, data, **config)
         self.controller = data[api_instance_name]
-        self.secret_token = 'Bearer SDN-Twin-Secret-Token-2026'
+        self.secret_token = os.environ.get('SDN_TWIN_AUTH_TOKEN', 'Bearer SDN-Twin-Secret-Token-2026')
 
     def _check_auth(self, req):
         if req.headers.get('Authorization') != self.secret_token:
@@ -424,7 +459,7 @@ class NetworkAPI(ControllerBase): # REST API for topology exposure
         if req.headers.get('If-None-Match') == version:
             return Response(status=304)
 
-        body = json.dumps(self.controller.topology.copy(), indent=2)
+        body = json.dumps(self.controller.topology, separators=(',', ':'))
         resp = Response(
             content_type='application/json',
             body=body.encode('utf-8')
@@ -437,7 +472,7 @@ class NetworkAPI(ControllerBase): # REST API for topology exposure
         auth_resp = self._check_auth(req)
         if auth_resp: return auth_resp
         
-        body = json.dumps(self.controller.topology['switches'].copy(), indent=2)
+        body = json.dumps(self.controller.topology['switches'], separators=(',', ':'))
         return Response(
             content_type='application/json',
             body=body.encode('utf-8')
@@ -448,7 +483,7 @@ class NetworkAPI(ControllerBase): # REST API for topology exposure
         auth_resp = self._check_auth(req)
         if auth_resp: return auth_resp
         
-        body = json.dumps(list(self.controller.topology['links']), indent=2)
+        body = json.dumps(self.controller.topology['links'], separators=(',', ':'))
         return Response(
             content_type='application/json',
             body=body.encode('utf-8')
@@ -459,7 +494,7 @@ class NetworkAPI(ControllerBase): # REST API for topology exposure
         auth_resp = self._check_auth(req)
         if auth_resp: return auth_resp
         
-        body = json.dumps(self.controller.topology['hosts'].copy(), indent=2)
+        body = json.dumps(self.controller.topology['hosts'], separators=(',', ':'))
         return Response(
             content_type='application/json',
             body=body.encode('utf-8')
@@ -473,7 +508,7 @@ class NetworkAPI(ControllerBase): # REST API for topology exposure
         version_info = {
             'version': self.controller.topology['version']
         }
-        body = json.dumps(version_info, indent=2)
+        body = json.dumps(version_info, separators=(',', ':'))
         return Response(
             content_type='application/json',
             body=body.encode('utf-8')
@@ -484,7 +519,7 @@ class NetworkAPI(ControllerBase): # REST API for topology exposure
         auth_resp = self._check_auth(req)
         if auth_resp: return auth_resp
         
-        body = json.dumps(self.controller.traffic.copy(), indent=2)
+        body = json.dumps(self.controller.traffic, separators=(',', ':'))
         return Response(
             content_type='application/json',
             body=body.encode('utf-8')
@@ -495,7 +530,7 @@ class NetworkAPI(ControllerBase): # REST API for topology exposure
         auth_resp = self._check_auth(req)
         if auth_resp: return auth_resp
         
-        body = json.dumps(self.controller.flow_matrix.copy(), indent=2)
+        body = json.dumps(self.controller.flow_matrix, separators=(',', ':'))
         return Response(
             content_type='application/json',
             body=body.encode('utf-8')

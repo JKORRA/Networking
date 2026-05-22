@@ -47,7 +47,10 @@ def run(): # Start the network with remote Ryu controller
     net.addController(controller)
     net.build()
     net.start()
-    net.waitConnected() # Wait for all switch to connect to the Ryu controller
+    try:
+        net.waitConnected(timeout=30) # Wait for all switches to connect to the Ryu controller
+    except Exception:
+        info('WARNING: Not all switches connected within 30s timeout\n')
     
     CLI(net)
     

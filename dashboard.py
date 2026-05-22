@@ -1,3 +1,4 @@
+import os
 import urllib.request
 import urllib.error
 import json
@@ -6,24 +7,32 @@ from flask_socketio import SocketIO
 import logging
 import time
 app = Flask(__name__)
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+socketio = SocketIO(app, cors_allowed_origins=os.environ.get('CORS_ORIGIN', 'http://localhost:5000'), async_mode='threading')
+app.static_folder = 'static'
 
-log = logging.getLogger('werkzeug')
-log.setLevel(logging.ERROR)
+logging.getLogger('werkzeug').setLevel(logging.ERROR)
 
 RYU_URL = 'http://localhost:8080'
 
 last_topology = {"switches": {}, "hosts": {}, "links": []}
+last_payload = None
 
-def _fetch_json(endpoint):
+def _fetch_json(endpoint, etag=None):
     try:
         url = RYU_URL + endpoint
-        req = urllib.request.Request(url, headers={'Authorization': 'Bearer SDN-Twin-Secret-Token-2026'})
+        token = os.environ.get('SDN_TWIN_AUTH_TOKEN', 'Bearer SDN-Twin-Secret-Token-2026')
+        req = urllib.request.Request(url, headers={'Authorization': token})
+        if etag:
+            req.add_header('If-None-Match', etag)
         with urllib.request.urlopen(req, timeout=2) as response:
             data = response.read().decode('utf-8')
-            return json.loads(data)
+            return json.loads(data), response.getheader('ETag')
+    except urllib.error.HTTPError as e:
+        if e.code == 304:
+            return None, etag
+        return None, None
     except Exception:
-        return None
+        return None, None
 
 def generate_logs(old_topo, new_topo):
     logs = []
@@ -60,33 +69,41 @@ def generate_logs(old_topo, new_topo):
     return logs
 
 def background_thread():
-    global last_topology
-    
-    while True:
-        try:
-            topology = _fetch_json('/api/topology')
-            traffic = _fetch_json('/api/traffic')
-            flows = _fetch_json('/api/flows')
-            
-            if topology:
-                logs = generate_logs(last_topology, topology)
-                if logs:
-                    socketio.emit('event_logs', logs)
+    global last_topology, last_payload
+    topo_etag = None
+    traffic_etag = None
+    flows_etag = None
+    from concurrent.futures import ThreadPoolExecutor
 
-                last_topology = topology.copy()
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        while True:
+            try:
+                topo_future = executor.submit(_fetch_json, '/api/topology', topo_etag)
+                traffic_future = executor.submit(_fetch_json, '/api/traffic', traffic_etag)
+                flows_future = executor.submit(_fetch_json, '/api/flows', flows_etag)
 
-                socketio.emit('update_data', {
-                    'topology': topology,
-                    'traffic': traffic or {},
-                    'flows': flows or {}
-                })
-            else:
-                socketio.emit('status', {'error': 'Could not fetch data from RYU'})
-        except Exception as e:
-            logging.error(f"Background poll error: {e}")
-            socketio.emit('status', {'error': f'Poll failed: {str(e)}'})
+                topology, topo_etag = topo_future.result()
+                traffic, traffic_etag = traffic_future.result()
+                flows, flows_etag = flows_future.result()
 
-        time.sleep(5)
+                if topology:
+                    logs = generate_logs(last_topology, topology)
+                    if logs:
+                        socketio.emit('event_logs', logs)
+                    last_topology = topology
+                    last_payload = {
+                        'topology': topology,
+                        'traffic': traffic or {},
+                        'flows': flows or {}
+                    }
+                    socketio.emit('update_data', last_payload)
+                else:
+                    socketio.emit('status', {'error': 'Could not fetch data from RYU'})
+            except Exception as e:
+                logging.error(f"Background poll error: {e}")
+                socketio.emit('status', {'error': f'Poll failed: {str(e)}'})
+
+            time.sleep(5)
 
 @app.route('/')
 def index():
@@ -95,6 +112,8 @@ def index():
 @socketio.on('connect')
 def handle_connect():
     print(f"Client connected: {request.sid}")
+    if last_payload:
+        socketio.emit('update_data', last_payload, to=request.sid)
 
 @socketio.on('disconnect')
 def handle_disconnect():

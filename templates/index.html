@@ -6,8 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SDN Twin Dashboard</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600&display=swap" rel="stylesheet">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
-    <script type="text/javascript" src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+    <script src="/static/socket.io.min.js"></script>
+    <script type="text/javascript" src="/static/vis-network.min.js"></script>
     <style>
         :root {
             --bg-dark: #0f172a;
@@ -608,14 +608,22 @@
                 document.getElementById('stat-hosts').innerText = hostCount;
                 document.getElementById('stat-traffic').innerHTML = totalTraffic.toFixed(2) + ' <span style="font-size: 1rem; color: var(--text-muted);">Mbps</span>';
 
-                const tbody = document.querySelector("#flows-table tbody"); tbody.innerHTML = ""; let hasFlows = false;
+                const tbody = document.querySelector("#flows-table tbody");
+                const fragment = document.createDocumentFragment();
+                let hasFlows = false;
                 for (let src in msg.flows) {
                     for (let dst in msg.flows[src]) {
                         hasFlows = true;
-                        tbody.innerHTML += `<tr><td>${src}</td><td>${dst}</td><td>${msg.flows[src][dst].toFixed(2)}</td></tr>`;
+                        const tr = document.createElement('tr');
+                        tr.innerHTML = `<td>${src}</td><td>${dst}</td><td>${msg.flows[src][dst].toFixed(2)}</td>`;
+                        fragment.appendChild(tr);
                     }
                 }
-                if (!hasFlows) tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--text-muted);">No active flows</td></tr>';
+                if (!hasFlows) {
+                    tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--text-muted);">No active flows</td></tr>';
+                } else {
+                    tbody.replaceChildren(fragment);
+                }
             } catch (e) {
                 console.error("Error drawing topology: ", e);
             }

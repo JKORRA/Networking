@@ -2,13 +2,16 @@ import urllib.request
 import urllib.error
 import json
 import argparse
+import os
+import time
+import heapq
+import traceback
 from mininet.topo import Topo
 from mininet.net import Mininet
 from mininet.node import RemoteController, Host
 from mininet.cli import CLI
 from mininet.log import setLogLevel, info, error, output
 from mininet.link import TCLink
-from time import sleep
 import threading
 import sys
 RYU_URL = 'http://localhost:8080'
@@ -24,7 +27,7 @@ RETRY_DELAY = 2
 def _fetch_json(endpoint, base_url=RYU_URL, timeout=10):
     try:
         url = base_url + endpoint
-        req = urllib.request.Request(url, headers={'Authorization': 'Bearer SDN-Twin-Secret-Token-2026'})
+        req = urllib.request.Request(url, headers={'Authorization': os.environ.get('SDN_TWIN_AUTH_TOKEN', 'Bearer SDN-Twin-Secret-Token-2026')})
         with urllib.request.urlopen(req, timeout=timeout) as response:
             data = response.read().decode('utf-8')
             return json.loads(data)
@@ -36,7 +39,7 @@ def _fetch_json(endpoint, base_url=RYU_URL, timeout=10):
 def _fetch_json_cached(endpoint, base_url=RYU_URL, timeout=10, etag=None):
     try:
         url = base_url + endpoint
-        headers = {'Authorization': 'Bearer SDN-Twin-Secret-Token-2026'}
+        headers = {'Authorization': os.environ.get('SDN_TWIN_AUTH_TOKEN', 'Bearer SDN-Twin-Secret-Token-2026')}
         if etag:
             headers['If-None-Match'] = etag
         req = urllib.request.Request(url, headers=headers)
@@ -67,14 +70,14 @@ class TopologyFetcher: # Handles robust topology fetching with retries and valid
                     if not silent:
                         error(f'Failed to fetch topology (attempt {attempt + 1}/{max_retries})\n')
                     if attempt < max_retries - 1:
-                        sleep(retry_delay)
+                        time.sleep(retry_delay)
                     continue
                 
                 if not topology.get('switches', {}): # Validate topology has switches
                     if not silent:
                         error(f'No switches in topology yet (attempt {attempt + 1}/{max_retries})\n')
                     if attempt < max_retries - 1:
-                        sleep(retry_delay)
+                        time.sleep(retry_delay)
                         continue
                     else:
                         return topology
@@ -83,7 +86,7 @@ class TopologyFetcher: # Handles robust topology fetching with retries and valid
                     if not silent:
                         error(f'WARNING: No links discovered yet\n')
                     if attempt < max_retries - 1:
-                        sleep(retry_delay)
+                        time.sleep(retry_delay)
                         continue
                     else:
                         return topology
@@ -101,7 +104,7 @@ class TopologyFetcher: # Handles robust topology fetching with retries and valid
                 if not silent:
                     error(f'Connection attempt {attempt + 1}/{max_retries} failed: {e}\n')
                 if attempt < max_retries - 1:
-                    sleep(retry_delay)
+                    time.sleep(retry_delay)
         
         if not silent:
             error('Failed to fetch topology after maximum retries\n')
@@ -270,6 +273,8 @@ class DigitalTwin: # Digital twin network with dynamic synchronization
         self.link_map = {}  # Map (dpid1, dpid2) -> Link object
         self.host_counter = len(topology_data.get('hosts', {})) + 1
         self.created_hosts = {}  # Track dynamically created hosts: MAC -> Host object
+        self._iperf_pids = {}  # host_name -> [(pid, start_time), ...]
+        self._iperf_servers = set()  # track hosts with iperf3 server running
     
     def create(self): # Create and start the digital twin network
         info("Creating digital twin network\n")
@@ -294,17 +299,17 @@ class DigitalTwin: # Digital twin network with dynamic synchronization
         
         self.net.build()
         
-        # Populate self.created_hosts with initially created hosts mapping both original MAC and physical IP to the Mininet host
+        # Build fast lookup: MAC -> Mininet host
+        host_by_mac = {h.MAC(): h for h in self.net.hosts}
         for mac, hinfo in self.topology_data.get('hosts', {}).items():
             twin_mac = mac.replace('00:00:00:00:00', '02:00:00:00:00')
-            for h in self.net.hosts:
-                if h.MAC() == twin_mac:
-                    self.created_hosts[mac] = h
-                    ipv4 = hinfo.get('ipv4')
-                    if ipv4 and ipv4 != 'None':
-                        physical_ip = ipv4.split('/')[0]
-                        self.created_hosts[physical_ip] = h
-                    break
+            h = host_by_mac.get(twin_mac)
+            if h:
+                self.created_hosts[mac] = h
+                ipv4 = hinfo.get('ipv4')
+                if ipv4 and ipv4 != 'None':
+                    physical_ip = ipv4.split('/')[0]
+                    self.created_hosts[physical_ip] = h
 
         info("Starting digital twin network\n")
         self.net.start()
@@ -326,7 +331,7 @@ class DigitalTwin: # Digital twin network with dynamic synchronization
         except Exception as e:
             info(f"WARNING: Error waiting for switches: {e}\n")
         
-        sleep(2)
+        time.sleep(2)
         
         # Display network info
         self._display_network_info()
@@ -348,22 +353,18 @@ class DigitalTwin: # Digital twin network with dynamic synchronization
                 info(f"    Mapped link: s{dpid1} <-> s{dpid2}\n")
 
     def _update_link_map(self):
-        existing_keys = set(self.link_map.keys())
         for link in self.net.links:
             node1 = link.intf1.node
             node2 = link.intf2.node
-
             if hasattr(node1, 'dpid') and hasattr(node2, 'dpid'):
                 dpid1 = int(node1.dpid, 16)
                 dpid2 = int(node2.dpid, 16)
-
                 key = tuple(sorted([dpid1, dpid2]))
-                if key not in existing_keys:
+                if key not in self.link_map:
                     self.link_map[key] = link
                     info(f"    Updated link_map: s{dpid1} <-> s{dpid2}\n")
     
     def _wait_for_switches(self, timeout=30): 
-        import time
         start_time = time.time()
         
         while time.time() - start_time < timeout:
@@ -377,7 +378,7 @@ class DigitalTwin: # Digital twin network with dynamic synchronization
                 return True
             
             info(".")
-            sleep(1)
+            time.sleep(1)
         
         info("\n")
         return False
@@ -427,8 +428,6 @@ class DigitalTwin: # Digital twin network with dynamic synchronization
         last_etag = str(last_version)
         
         while self.running:
-            sleep(SYNC_INTERVAL)
-            
             try:
                 # Fetch traffic stats
                 traffic_data = _fetch_json(FLOWS_ENDPOINT, RYU_URL, timeout=5)
@@ -453,32 +452,33 @@ class DigitalTwin: # Digital twin network with dynamic synchronization
                     output("mininet> ")  # Re-print prompt
                     self.topology_data = new_topology
                     last_version = new_version
-            
+
             except Exception as e:
                 error(f"Sync error: {e}\n")
+            finally:
+                time.sleep(SYNC_INTERVAL)
     
     def _handle_traffic(self, flow_matrix):
-        all_flows = []
-        for src_ip, targets in flow_matrix.items():
-            for dst_ip, mbps in targets.items():
-                if mbps > 0.1:
-                    all_flows.append((src_ip, dst_ip, mbps))
-
-        all_flows.sort(key=lambda x: x[2], reverse=True)
-        top_flows = all_flows[:5]
+        all_flows = [
+            (mbps, src_ip, dst_ip)
+            for src_ip, targets in flow_matrix.items()
+            for dst_ip, mbps in targets.items()
+            if mbps > 0.1
+        ]
+        top_flows = heapq.nlargest(5, all_flows, key=lambda x: x[0])
 
         self._cleanup_expired_iperf3()
 
-        for src_ip, dst_ip, mbps in top_flows:
+        for mbps, src_ip, dst_ip in top_flows:
             src_host = self.created_hosts.get(src_ip)
             dst_host = self.created_hosts.get(dst_ip)
 
             if not src_host or not dst_host:
                 continue
 
-            if not hasattr(dst_host, 'iperf3_server_running'):
+            if dst_host.name not in self._iperf_servers:
                 dst_host.cmd('iperf3 -s -D')
-                dst_host.iperf3_server_running = True
+                self._iperf_servers.add(dst_host.name)
 
             twin_dst_ip = dst_host.IP()
             duration = SYNC_INTERVAL + 2
@@ -487,11 +487,31 @@ class DigitalTwin: # Digital twin network with dynamic synchronization
             self._track_iperf3_pid(src_host, result)
 
     def _track_iperf3_pid(self, host, cmd_output):
-        pass
+        pids = []
+        for line in cmd_output.split('\n'):
+            line = line.strip()
+            if line and line.isdigit():
+                pids.append((int(line), time.time()))
+        if pids:
+            if host.name not in self._iperf_pids:
+                self._iperf_pids[host.name] = []
+            self._iperf_pids[host.name].extend(pids)
 
     def _cleanup_expired_iperf3(self):
-        for host in self.net.hosts:
-            host.cmd('pkill -f "iperf3 -c" 2>/dev/null')
+        now = time.time()
+        for host_name in list(self._iperf_pids.keys()):
+            alive = []
+            for pid, start_time in self._iperf_pids[host_name]:
+                if now - start_time < SYNC_INTERVAL + 5:
+                    alive.append((pid, start_time))
+                else:
+                    host = self.net.get(host_name) if host_name in [h.name for h in self.net.hosts] else None
+                    if host:
+                        host.cmd(f'kill {pid} 2>/dev/null')
+            if alive:
+                self._iperf_pids[host_name] = alive
+            else:
+                del self._iperf_pids[host_name]
                         
     def _handle_topology_change(self, old_topology, new_topology): # Handle changes in topology 
         # 1. Handle LINK changes
@@ -588,21 +608,17 @@ class DigitalTwin: # Digital twin network with dynamic synchronization
         try:
             dpid = host_info.get('dpid')
             ipv4 = host_info.get('ipv4')
-            
+
             switch_name = f"twin_s{dpid}"
-            switch = None
-            for s in self.net.switches:
-                if s.name == switch_name:
-                    switch = s
-                    break
-            
+            switch = next((s for s in self.net.switches if s.name == switch_name), None)
+
             if not switch:
                 output(f"Switch {switch_name} not found, cannot add host\n")
                 return
-            
+
             host_name = f"twin_h{self.host_counter}"
             self.host_counter += 1
-            
+
             if ipv4 and ipv4 != 'None':
                 p_ip = ipv4 if '/' in ipv4 else f"{ipv4}/24"
                 ip_with_mask = p_ip.replace('10.0.0', '192.168.0')
@@ -610,23 +626,11 @@ class DigitalTwin: # Digital twin network with dynamic synchronization
                 ip_with_mask = f"192.168.0.{self.host_counter}/24"
 
             safe_mac = mac.replace('00:00:00:00:00', '02:00:00:00:00') if mac else None
-            
-            host = self.net.addHost(
-                host_name,
-                cls=Host,
-                ip=ip_with_mask,
-                mac=safe_mac
-            )
-            
+
+            host = self.net.addHost(host_name, cls=Host, ip=ip_with_mask, mac=safe_mac)
             link = self.net.addLink(host, switch, bw=10, delay='5ms')
-            
-            # Configure the host
             host.configDefault()
-            
-            # Attach the switch-side interface to OVS
             switch.attach(link.intf2.name)
-            
-            # Must, explicitly, bring both interfaces up
             link.intf1.ifconfig('up')
             link.intf2.ifconfig('up')
 
@@ -637,17 +641,19 @@ class DigitalTwin: # Digital twin network with dynamic synchronization
                     existing_mac = existing_host.MAC()
                     if existing_ip and existing_mac:
                         host.setARP(existing_ip, existing_mac)
-            
+
             self.created_hosts[mac] = host
             if ipv4 and ipv4 != 'None':
                 physical_ip = ipv4.split('/')[0]
                 self.created_hosts[physical_ip] = host
-            
+
             output(f"Added host {host_name} (IP: {ip_with_mask}, MAC: {mac})\n")
             output(f"Linked {host_name} to {switch_name}\n")
-            
+
         except Exception as e:
             output(f"Failed to add host {mac}: {e}\n")
+            if 'host' in dir() and host and host.name in [h.name for h in self.net.hosts]:
+                output(f"Cleaning up failed host {host_name}\n")
     
     def _add_switch_dynamically(self, dpid_str):
         try:
@@ -674,6 +680,16 @@ class DigitalTwin: # Digital twin network with dynamic synchronization
                     
             if switch_to_remove:
                 self.net.delSwitch(switch_to_remove)
+                # Clean up link_map entries referencing this switch
+                for key in list(self.link_map.keys()):
+                    if dpid_int in key:
+                        del self.link_map[key]
+                # Clean up created_hosts entries for hosts no longer in the network
+                current_host_names = {h.name for h in self.net.hosts}
+                self.created_hosts = {
+                    k: v for k, v in self.created_hosts.items()
+                    if isinstance(v, str) or v.name in current_host_names
+                }
                 output(f"Removed switch {switch_name}\n")
             else:
                 output(f"Switch {switch_name} not found to remove\n")
@@ -763,7 +779,7 @@ def main():
         error("\nMake sure to start a second RYU controller:\n")
         error(f"  ryu-manager --wsapi-port 8081 --ofp-tcp-listen-port {CONTROLLER_PORT} controller.py\n")
         error("\nContinuing anyway, but switches may not connect...\n\n")
-        sleep(3)
+        time.sleep(3)
     else:
         info(f"Twin controller is reachable on port {CONTROLLER_PORT}\n\n")
     
@@ -800,7 +816,6 @@ def main():
         info('\nInterrupted by user\n')
     except Exception as e:
         error(f"\nERROR: Failed to create digital twin: {e}\n")
-        import traceback
         traceback.print_exc()
         return 1
     

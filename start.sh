@@ -20,6 +20,11 @@ DASHBOARD_PORT=5000
 DOCKER_IMAGE="my-ryu"
 DOCKERFILE="Dockerfile.ryu"
 
+# Auto-generate auth token if not set
+if [ -z "${SDN_TWIN_AUTH_TOKEN}" ]; then
+    export SDN_TWIN_AUTH_TOKEN="Bearer $(tr -dc 'a-zA-Z0-9' < /dev/urandom | fold -w 32 | head -n 1)"
+fi
+
 # --- Readiness probe settings ---
 MAX_WAIT=60
 POLL_INTERVAL=1
@@ -37,11 +42,26 @@ print_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 print_err()  { echo -e "${RED}[FAIL]${NC} $1"; }
 
 # --- Readiness probe function ---
+wait_for_http() {
+    local url=$1
+    local service=$2
+    local elapsed=0
+    while [ $elapsed -lt $MAX_WAIT ]; do
+        if curl -s -o /dev/null -w "%{http_code}" -H "Authorization: ${SDN_TWIN_AUTH_TOKEN}" "$url" 2>/dev/null | grep -q 200; then
+            print_ok "${service} is ready"
+            return 0
+        fi
+        sleep $POLL_INTERVAL
+        elapsed=$((elapsed + POLL_INTERVAL))
+    done
+    print_warn "${service} did not become ready within ${MAX_WAIT}s"
+    return 1
+}
+
 wait_for_port() {
     local port=$1
     local service=$2
     local elapsed=0
-
     while [ $elapsed -lt $MAX_WAIT ]; do
         if fuser "${port}/tcp" &>/dev/null; then
             print_ok "${service} is ready (port ${port})"
@@ -50,7 +70,6 @@ wait_for_port() {
         sleep $POLL_INTERVAL
         elapsed=$((elapsed + POLL_INTERVAL))
     done
-
     print_warn "${service} did not become ready within ${MAX_WAIT}s (port ${port})"
     return 1
 }
@@ -94,6 +113,13 @@ if ! command -v iperf3 &> /dev/null; then
     print_warn "Install with: sudo apt install iperf3"
 fi
 
+PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
+if [ "$(echo "$PYTHON_VERSION >= 3.12" | bc 2>/dev/null)" = "1" ] 2>/dev/null; then
+    print_warn "Python $PYTHON_VERSION detected. Ryu requires Python < 3.12."
+    print_warn "The Ryu controller runs in Docker but dashboard and twin run on the host."
+    print_warn "If you encounter issues, use Python 3.11 or earlier."
+fi
+
 VENV_PYTHON="$PROJECT_DIR/venv/bin/python3"
 if [ -f "$VENV_PYTHON" ] && "$VENV_PYTHON" -c "import flask" 2>/dev/null; then
     print_ok "Flask found (venv)"
@@ -118,13 +144,12 @@ if [ "$DASHBOARD_PYTHON" = "$VENV_PYTHON" ]; then
     fi
 fi
 
-if ! docker image inspect $DOCKER_IMAGE &> /dev/null; then
-    print_step "Building Ryu Docker image (first time only)..."
-    docker build -t $DOCKER_IMAGE -f "$PROJECT_DIR/$DOCKERFILE" "$PROJECT_DIR"
-    print_ok "Docker image '${DOCKER_IMAGE}' built successfully"
-else
-    print_ok "Docker image '${DOCKER_IMAGE}' already exists"
-fi
+# Build docker image in background if needed
+docker image inspect $DOCKER_IMAGE &> /dev/null || {
+    print_step "Building Ryu Docker image in background..."
+    (docker build -t $DOCKER_IMAGE -f "$PROJECT_DIR/$DOCKERFILE" "$PROJECT_DIR" && print_ok "Docker image '${DOCKER_IMAGE}' built") &
+    DOCKER_BUILD_PID=$!
+}
 
 # ============================================================================
 #  Cleanup
@@ -134,16 +159,23 @@ print_step "Cleaning up previous sessions..."
 
 tmux kill-session -t $SESSION 2>/dev/null || true
 docker ps -q --filter "ancestor=${DOCKER_IMAGE}" | xargs -r docker stop 2>/dev/null || true
-mn -c 2>/dev/null || true
+if pgrep -f "mininet" > /dev/null 2>&1 || pgrep -f "net.py" > /dev/null 2>&1; then
+    mn -c 2>/dev/null || true
+else
+    print_ok "No Mininet processes to clean"
+fi
 service openvswitch-switch start 2>/dev/null || true
 
-fuser -k ${PHYSICAL_CTRL_PORT}/tcp 2>/dev/null || true
-fuser -k ${TWIN_CTRL_PORT}/tcp 2>/dev/null || true
-fuser -k ${PHYSICAL_API_PORT}/tcp 2>/dev/null || true
-fuser -k ${TWIN_API_PORT}/tcp 2>/dev/null || true
-fuser -k ${DASHBOARD_PORT}/tcp 2>/dev/null || true
+for port in ${PHYSICAL_CTRL_PORT} ${TWIN_CTRL_PORT} ${PHYSICAL_API_PORT} ${TWIN_API_PORT} ${DASHBOARD_PORT}; do
+    fuser -k "${port}/tcp" 2>/dev/null || true
+done
 
 sleep 1
+# Wait for Docker build if it was kicked off
+if [ -n "$DOCKER_BUILD_PID" ]; then
+    print_step "Waiting for Docker build to complete..."
+    wait $DOCKER_BUILD_PID 2>/dev/null || print_err "Docker build failed"
+fi
 print_ok "Cleanup complete"
 
 # ============================================================================
@@ -154,36 +186,54 @@ print_step "Starting tmux session '${SESSION}'..."
 
 # 1. Physical Ryu Controller FIRST (must be ready before Mininet connects)
 tmux new-session -d -s $SESSION -n "SDN-Twin" -c "$PROJECT_DIR"
-tmux send-keys -t $SESSION "echo '=== PHYSICAL RYU CONTROLLER ===' && docker run --rm --network host -v \"$PROJECT_DIR\":/app -w /app ${DOCKER_IMAGE} ryu-manager --observe-links controller.py" C-m
+tmux send-keys -t $SESSION "echo '=== PHYSICAL RYU CONTROLLER ===' && docker run --rm --network host -v \"$PROJECT_DIR\":/app -w /app -e SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" ${DOCKER_IMAGE} ryu-manager --observe-links controller.py" C-m
 
-wait_for_port $PHYSICAL_CTRL_PORT "Physical Ryu OpenFlow" || true
-wait_for_port $PHYSICAL_API_PORT "Physical Ryu REST API" || true
-sleep 3
+wait_for_http "http://localhost:${PHYSICAL_API_PORT}/api/version" "Physical Ryu" || true
 
 # 2. Physical Network (connects to already-running controller)
 tmux split-window -v -t $SESSION -c "$PROJECT_DIR"
 tmux send-keys -t $SESSION "echo '=== PHYSICAL NETWORK ===' && python3 net.py" C-m
 
-sleep 5
+# Wait for physical network to be discovered (topology version >= 1)
+print_step "Waiting for physical network topology..."
+TOPOLOGY_READY=0
+for i in $(seq 1 30); do
+    VERSION=$(curl -s -H "Authorization: ${SDN_TWIN_AUTH_TOKEN}" "http://localhost:${PHYSICAL_API_PORT}/api/version" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('version',0))" 2>/dev/null)
+    if [ "$VERSION" -ge 1 ] 2>/dev/null; then
+        print_ok "Physical network discovered (version $VERSION)"
+        TOPOLOGY_READY=1
+        break
+    fi
+    sleep 1
+done
+if [ "$TOPOLOGY_READY" -ne 1 ]; then
+    print_warn "Physical network topology not fully discovered, continuing anyway..."
+fi
 
 # 3. Twin Ryu Controller
 tmux split-window -v -t $SESSION -c "$PROJECT_DIR"
-tmux send-keys -t $SESSION "echo '=== TWIN RYU CONTROLLER ===' && docker run --rm --network host -v \"$PROJECT_DIR\":/app -w /app ${DOCKER_IMAGE} ryu-manager --observe-links --wsapi-port ${TWIN_API_PORT} --ofp-tcp-listen-port ${TWIN_CTRL_PORT} controller.py" C-m
+tmux send-keys -t $SESSION "echo '=== TWIN RYU CONTROLLER ===' && docker run --rm --network host -v \"$PROJECT_DIR\":/app -w /app -e SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" ${DOCKER_IMAGE} ryu-manager --observe-links --wsapi-port ${TWIN_API_PORT} --ofp-tcp-listen-port ${TWIN_CTRL_PORT} controller.py" C-m
 
-wait_for_port $TWIN_CTRL_PORT "Twin Ryu OpenFlow" || true
-wait_for_port $TWIN_API_PORT "Twin Ryu REST API" || true
-
-sleep 5
+wait_for_http "http://localhost:${TWIN_API_PORT}/api/version" "Twin Ryu" || true
 
 # 4. Digital Twin (fetches from now-ready physical controller)
 tmux split-window -v -t $SESSION -c "$PROJECT_DIR"
-tmux send-keys -t $SESSION "echo '=== DIGITAL TWIN ===' && python3 twin.py --sync" C-m
+tmux send-keys -t $SESSION "echo '=== DIGITAL TWIN ===' && SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" python3 twin.py --sync" C-m
 
-sleep 10
+# Wait for physical network to have hosts discovered
+print_step "Waiting for hosts to be discovered..."
+for i in $(seq 1 45); do
+    HOST_COUNT=$(curl -s -H "Authorization: ${SDN_TWIN_AUTH_TOKEN}" "http://localhost:${PHYSICAL_API_PORT}/api/topology" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('hosts',{})))" 2>/dev/null)
+    if [ "$HOST_COUNT" -ge 1 ] 2>/dev/null; then
+        print_ok "Hosts discovered ($HOST_COUNT hosts)"
+        break
+    fi
+    sleep 1
+done
 
 # 5. Dashboard
 tmux new-window -t $SESSION -n "Dashboard" -c "$PROJECT_DIR"
-tmux send-keys -t $SESSION:Dashboard "echo '=== WEB DASHBOARD ===' && \"$DASHBOARD_PYTHON\" dashboard.py" C-m
+tmux send-keys -t $SESSION:Dashboard "echo '=== WEB DASHBOARD ===' && SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" \"$DASHBOARD_PYTHON\" dashboard.py" C-m
 
 wait_for_port $DASHBOARD_PORT "Dashboard" || true
 
