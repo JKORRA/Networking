@@ -214,17 +214,14 @@ class DigitalTwinTopo(Topo): # Mininet topology with port conflict detection
                 'port': port
             }
             
-            # Use original IP or generate one with IP Translation (Fixes Linux Kernel Bug)
+            # Use original physical IP to ensure true packet fidelity
             if ipv4 and ipv4 != 'None':
-                p_ip = ipv4 if '/' in ipv4 else f"{ipv4}/24"
-                ip_with_mask = p_ip.replace('10.0.0', '192.168.0')
+                ip_with_mask = ipv4 if '/' in ipv4 else f"{ipv4}/24"
             else:
-                ip_with_mask = f"192.168.0.{host_counter}/24"
+                ip_with_mask = f"10.0.0.{host_counter}/24"
 
-            safe_mac = mac_addr.replace('00:00:00:00:00', '02:00:00:00:00') if mac_addr else None
-            
-            self.addHost(host_name, ip=ip_with_mask, mac=safe_mac)
-            info(f"Added host {host_name} (IP: {ip_with_mask}, Safe MAC: {safe_mac})\n")
+            self.addHost(host_name, ip=ip_with_mask, mac=mac_addr)
+            info(f"Added host {host_name} (IP: {ip_with_mask}, MAC: {mac_addr})\n")
             
             # Link host to switch
             if dpid in self.switch_map:
@@ -302,8 +299,7 @@ class DigitalTwin: # Digital twin network with dynamic synchronization
         # Build fast lookup: MAC -> Mininet host
         host_by_mac = {h.MAC(): h for h in self.net.hosts}
         for mac, hinfo in self.topology_data.get('hosts', {}).items():
-            twin_mac = mac.replace('00:00:00:00:00', '02:00:00:00:00')
-            h = host_by_mac.get(twin_mac)
+            h = host_by_mac.get(mac)
             if h:
                 self.created_hosts[mac] = h
                 ipv4 = hinfo.get('ipv4')
@@ -620,14 +616,11 @@ class DigitalTwin: # Digital twin network with dynamic synchronization
             self.host_counter += 1
 
             if ipv4 and ipv4 != 'None':
-                p_ip = ipv4 if '/' in ipv4 else f"{ipv4}/24"
-                ip_with_mask = p_ip.replace('10.0.0', '192.168.0')
+                ip_with_mask = ipv4 if '/' in ipv4 else f"{ipv4}/24"
             else:
-                ip_with_mask = f"192.168.0.{self.host_counter}/24"
+                ip_with_mask = f"10.0.0.{self.host_counter}/24"
 
-            safe_mac = mac.replace('00:00:00:00:00', '02:00:00:00:00') if mac else None
-
-            host = self.net.addHost(host_name, cls=Host, ip=ip_with_mask, mac=safe_mac)
+            host = self.net.addHost(host_name, cls=Host, ip=ip_with_mask, mac=mac)
             link = self.net.addLink(host, switch, bw=10, delay='5ms')
             host.configDefault()
             switch.attach(link.intf2.name)

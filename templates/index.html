@@ -327,15 +327,15 @@
                 <h4 style="margin: 0 0 10px; font-size: 0.85rem; color: var(--text-muted);">Legend</h4>
                 <div style="font-size: 0.8rem; display: flex; align-items: center; gap: 8px; margin-bottom: 5px;">
                     <div style="width: 10px; height: 10px; border-radius: 50%; background: var(--glow-low);"></div> &lt;
-                    1 Mbps
+                    40% Util
                 </div>
                 <div style="font-size: 0.8rem; display: flex; align-items: center; gap: 8px; margin-bottom: 5px;">
-                    <div style="width: 10px; height: 10px; border-radius: 50%; background: var(--glow-med);"></div> 1 -
-                    5 Mbps
+                    <div style="width: 10px; height: 10px; border-radius: 50%; background: var(--glow-med);"></div> 40% -
+                    80% Util
                 </div>
                 <div style="font-size: 0.8rem; display: flex; align-items: center; gap: 8px;">
                     <div style="width: 10px; height: 10px; border-radius: 50%; background: var(--glow-high);"></div>
-                    &gt; 5 Mbps
+                    &gt; 80% Util
                 </div>
             </div>
         </div>
@@ -555,9 +555,16 @@
                     }
                     totalTraffic += rx;
 
+                    let max_capacity = 10; // Host links are 10 Mbps
+                    let percentage = (rx / max_capacity) * 100;
+                    
                     let ec = '#22c55e', w = 2;
-                    if (rx > 5) { ec = '#ef4444'; w = 5; } else if (rx >= 1) { ec = '#eab308'; w = 3; }
-                    newEdges.push({ id: 'e_h' + mac, from: 'h' + mac, to: 's' + host.dpid, color: { color: ec, hover: ec, highlight: '#eab308' }, width: w, label: rx.toFixed(2) + ' Mbps', font: { align: 'horizontal', color: ec, strokeWidth: 2, size: 10, face: 'Inter' } });
+                    if (percentage > 80) { ec = '#ef4444'; w = 5; } else if (percentage >= 40) { ec = '#eab308'; w = 3; }
+                    
+                    let labelText = rx.toFixed(1) + ' Mbps';
+                    if (rx > 0) labelText += ' (' + percentage.toFixed(0) + '%)';
+                    
+                    newEdges.push({ id: 'e_h' + mac, from: 'h' + mac, to: 's' + host.dpid, color: { color: ec, hover: ec, highlight: '#eab308' }, width: w, label: labelText, font: { align: 'horizontal', color: ec, strokeWidth: 2, size: 10, face: 'Inter' } });
                 }
 
                 let linkMap = {};
@@ -574,9 +581,16 @@
 
                 Object.keys(linkMap).forEach(edgeId => {
                     let l = linkMap[edgeId]; totalTraffic += l.rx;
+                    let max_capacity = 100; // Switch backbone links are 100 Mbps
+                    let percentage = (l.rx / max_capacity) * 100;
+                    
                     let ec = '#22c55e', w = 2;
-                    if (l.rx > 5) { ec = '#ef4444'; w = 5; } else if (l.rx >= 1) { ec = '#eab308'; w = 3; }
-                    newEdges.push({ id: edgeId, from: l.from, to: l.to, color: { color: ec, hover: ec, highlight: '#eab308' }, width: w, label: l.rx.toFixed(2) + ' Mbps', font: { align: 'horizontal', color: ec, strokeWidth: 2, size: 10, face: 'Inter' } });
+                    if (percentage > 80) { ec = '#ef4444'; w = 5; } else if (percentage >= 40) { ec = '#eab308'; w = 3; }
+                    
+                    let labelText = l.rx.toFixed(1) + ' Mbps';
+                    if (l.rx > 0) labelText += ' (' + percentage.toFixed(0) + '%)';
+                    
+                    newEdges.push({ id: edgeId, from: l.from, to: l.to, color: { color: ec, hover: ec, highlight: '#eab308' }, width: w, label: labelText, font: { align: 'horizontal', color: ec, strokeWidth: 2, size: 10, face: 'Inter' } });
                 });
 
                 // Diff-based updates: only add/remove/update changed items

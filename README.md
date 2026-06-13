@@ -48,8 +48,8 @@ The system exploits the **Ryu Northbound REST API** to retrieve topology and tra
 │  │        │         │     │    │         │           │          │  │
 │  │       h2        h3     │    │        th2         th3         │  │
 │  │                        │    │                                │  │
-│  │  IPs: 10.0.0.x/24     │    │  IPs: 192.168.0.x/24          │  │
-│  │  MACs: 00:00:00:...    │    │  MACs: 02:00:00:...           │  │
+│  │  IPs: 10.0.0.x/24     │    │  IPs: 10.0.0.x/24             │  │
+│  │  MACs: 00:00:00:...   │    │  MACs: 00:00:00:...           │  │
 │  └───────────┬────────────┘    └──────────────┬─────────────────┘  │
 │              │                                │                    │
 │       ┌──────┴──────┐               ┌─────────┴──────┐            │
@@ -73,8 +73,7 @@ The system exploits the **Ryu Northbound REST API** to retrieve topology and tra
 | Feature | Description |
 |---|---|
 | **Automated Topology Replication** | Fetches real-time switch, link, and host data via Ryu REST API and builds an identical Mininet clone |
-| **IP Translation** | Maps physical IPs (`10.0.0.x`) → twin IPs (`192.168.0.x`) to prevent Linux kernel namespace conflicts |
-| **MAC Isolation** | Remaps MAC addresses (`00:00:00:` → `02:00:00:`) to prevent ARP poisoning between coexisting Mininet instances |
+| **IP & MAC Fidelity** | The twin uses the identical IP (`10.0.0.x`) and MAC addresses as the physical network, leveraging strict Mininet network namespaces for 100% control-plane accuracy |
 | **Traffic Monitoring** | Polls OpenFlow `OFPPortStatsRequest` and `OFPFlowStatsRequest` to calculate real-time Rx/Tx Mbps per port and per flow |
 | **Flow-Based Emulation** | Detects active end-to-end IP flows >1 Mbps and auto-spawns exact `iperf3` client/server replicas between twin hosts |
 | **Dynamic Sync** | Background thread detects topology changes (link up/down, new hosts, dynamic switches) and reproduces them identically at runtime |
@@ -96,7 +95,7 @@ The system exploits the **Ryu Northbound REST API** to retrieve topology and tra
 ├── dashboard.py         # Flask web server for the visualization dashboard
 ├── Dockerfile.ryu       # Docker image for running Ryu on modern systems
 ├── start.sh             # Launcher script (Tmux + Docker orchestration)
-├── stop.sh              # Cleanup script
+
 ├── templates/
 │   └── index.html       # vis-network frontend with traffic heatmaps
 └── README.md            # This file
@@ -114,18 +113,18 @@ The system exploits the **Ryu Northbound REST API** to retrieve topology and tra
 
 - **`twin.py`** — The main Digital Twin engine:
   - Fetches the physical topology via REST API with retry logic
-  - Builds an isolated Mininet replica with translated IPs and MACs
+  - Builds an isolated Mininet replica with 100% identical IPs and MACs
   - Runs a background synchronization loop detecting topology and traffic changes
   - Spawns `iperf3` inside twin hosts to emulate detected traffic loads
 
 - **`dashboard.py`** — A Flask application that proxies data from Ryu and serves the web dashboard.
 
 - **`templates/index.html`** — Interactive graph visualization using [vis-network](https://visjs.github.io/vis-network/docs/network/). Edges are color-coded based on traffic:
-  - 🟢 Green: < 1 Mbps
-  - 🟡 Yellow: 1–5 Mbps
-  - 🔴 Red: > 5 Mbps
+  - 🟢 Green: < 40% Link Utilization
+  - 🟡 Yellow: 40% - 80% Link Utilization
+  - 🔴 Red: > 80% Link Utilization
 
-- **`start.sh` & `stop.sh`** — Automated orchestration scripts that use Tmux to launch all components in isolated panes cleanly, managing dependencies and port conflicts.
+- **`start.sh`** — Automated orchestration script that uses Tmux to launch all components in isolated panes cleanly, managing dependencies, automated browser launching, and cleanup on exit via `--stop`.
 
 ---
 
@@ -212,7 +211,7 @@ This will automatically:
 
 To detach from the tmux session, press `Ctrl+B` then `d`.
 To re-attach, run `tmux attach -t sdn-twin`.
-To stop everything, run `sudo ./stop.sh`.
+To stop everything, run `sudo ./start.sh --stop`.
 
 ### Manual Execution
 
@@ -272,7 +271,7 @@ python3 dashboard.py
 ./venv/bin/python3 dashboard.py
 ```
 
-Open your browser and navigate to: **http://localhost:5000**
+If you use `start.sh`, the dashboard will automatically open in your browser when ready. Otherwise, open your browser and navigate to: **http://localhost:5000**
 
 ---
 
@@ -294,7 +293,7 @@ In **Terminal 4** (twin network's `mininet>` prompt):
 mininet> pingall
 ```
 
-Verify that the Digital Twin also has full connectivity between its hosts using the translated `192.168.0.x` IP addresses.
+Verify that the Digital Twin also has full connectivity between its hosts using the identical `10.0.0.x` IP addresses.
 
 ### Traffic Generation and Heatmap
 
@@ -346,20 +345,16 @@ The twin will detect and replicate this change as well.
 
 ## Architecture Details
 
-### IP Translation (Namespace Isolation)
+### Namespace Isolation (Packet Fidelity)
 
-Running two Mininet instances on the same Linux host causes **kernel namespace conflicts**: both instances create interfaces named `h1-eth0`, `s1-eth1`, etc., and use the same IP range (`10.0.0.x`). This leads to:
+To act as a true Digital Twin, the replicated network must use the exact same IP and MAC addresses as the physical network. 
 
-- ARP poisoning (hosts answering for IPs they shouldn't own)
-- Routing table contamination
-- Unpredictable packet delivery
-
-**Solution**: The twin translates all addresses:
+Because Mininet strictly isolates hosts inside Linux Network Namespaces (`netns`), the kernel flawlessly manages both the physical hosts (`h1`, `10.0.0.1`) and the twin hosts (`twin_h1`, `10.0.0.1`) simultaneously without routing conflicts or ARP poisoning. 
 
 | Property | Physical Network | Digital Twin |
 |---|---|---|
-| IP Range | `10.0.0.x/24` | `192.168.0.x/24` |
-| MAC Prefix | `00:00:00:00:00:xx` | `02:00:00:00:00:xx` |
+| IP Range | `10.0.0.x/24` | `10.0.0.x/24` |
+| MAC Prefix | `00:00:00:00:00:xx` | `00:00:00:00:00:xx` |
 | Switch Names | `s1`, `s2`, `s3` | `twin_s1`, `twin_s2`, `twin_s3` |
 | Host Names | `h1`, `h2`, `h3` | `twin_h1`, `twin_h2`, `twin_h3` |
 | Controller Port | `6633` | `6634` |
