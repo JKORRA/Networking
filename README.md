@@ -458,7 +458,7 @@ All endpoints are served by the Ryu controller on port `8080` (physical) or `808
 To fully reset the environment between runs, you can simply use the provided stop script:
 
 ```bash
-sudo ./stop.sh
+sudo ./start.sh --stop
 ```
 
 Alternatively, run the cleanup commands manually:

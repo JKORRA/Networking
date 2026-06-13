@@ -78,6 +78,34 @@ wait_for_port() {
 #  Pre-flight checks
 # ============================================================================
 
+cleanup() {
+    print_step "Cleaning up previous sessions and processes..."
+    tmux kill-session -t $SESSION 2>/dev/null || true
+    docker ps -q --filter "ancestor=${DOCKER_IMAGE}" | xargs -r docker stop 2>/dev/null || true
+    # Always run mn -c to clean up stale veth interfaces, even if processes crashed
+    mn -c 2>/dev/null || true
+    service openvswitch-switch start 2>/dev/null || true
+
+    for port in ${PHYSICAL_CTRL_PORT} ${TWIN_CTRL_PORT} ${PHYSICAL_API_PORT} ${TWIN_API_PORT} ${DASHBOARD_PORT}; do
+        fuser -k "${port}/tcp" 2>/dev/null || true
+    done
+    
+    pkill -f "ryu-manager" 2>/dev/null || true
+    pkill -f "dashboard.py" 2>/dev/null || true
+    pkill -f "iperf" 2>/dev/null || true
+    pkill -f "iperf3" 2>/dev/null || true
+    print_ok "Cleanup complete"
+}
+
+if [ "$1" = "--stop" ]; then
+    if [ "$EUID" -ne 0 ]; then
+        print_err "This script must be run as root (sudo ./start.sh --stop)"
+        exit 1
+    fi
+    cleanup
+    exit 0
+fi
+
 echo ""
 echo -e "${CYAN}============================================${NC}"
 echo -e "${CYAN}  SDN Digital Twin - System Launcher${NC}"
@@ -155,20 +183,7 @@ docker image inspect $DOCKER_IMAGE &> /dev/null || {
 #  Cleanup
 # ============================================================================
 
-print_step "Cleaning up previous sessions..."
-
-tmux kill-session -t $SESSION 2>/dev/null || true
-docker ps -q --filter "ancestor=${DOCKER_IMAGE}" | xargs -r docker stop 2>/dev/null || true
-if pgrep -f "mininet" > /dev/null 2>&1 || pgrep -f "net.py" > /dev/null 2>&1; then
-    mn -c 2>/dev/null || true
-else
-    print_ok "No Mininet processes to clean"
-fi
-service openvswitch-switch start 2>/dev/null || true
-
-for port in ${PHYSICAL_CTRL_PORT} ${TWIN_CTRL_PORT} ${PHYSICAL_API_PORT} ${TWIN_API_PORT} ${DASHBOARD_PORT}; do
-    fuser -k "${port}/tcp" 2>/dev/null || true
-done
+cleanup
 
 sleep 1
 # Wait for Docker build if it was kicked off
@@ -176,7 +191,6 @@ if [ -n "$DOCKER_BUILD_PID" ]; then
     print_step "Waiting for Docker build to complete..."
     wait $DOCKER_BUILD_PID 2>/dev/null || print_err "Docker build failed"
 fi
-print_ok "Cleanup complete"
 
 # ============================================================================
 #  Launch all components in tmux
@@ -186,13 +200,15 @@ print_step "Starting tmux session '${SESSION}'..."
 
 # 1. Physical Ryu Controller FIRST (must be ready before Mininet connects)
 tmux new-session -d -s $SESSION -n "SDN-Twin" -c "$PROJECT_DIR"
-tmux send-keys -t $SESSION "echo '=== PHYSICAL RYU CONTROLLER ===' && docker run --rm --network host -v \"$PROJECT_DIR\":/app -w /app -e SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" ${DOCKER_IMAGE} ryu-manager --observe-links controller.py" C-m
+PANE_PHYS_CTRL=$(tmux display-message -p -t $SESSION -F "#{pane_id}")
+tmux send-keys -t $PANE_PHYS_CTRL "echo '=== PHYSICAL RYU CONTROLLER ===' && docker run --rm --network host -v \"$PROJECT_DIR\":/app -w /app -e SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" ${DOCKER_IMAGE} ryu-manager --observe-links controller.py" C-m
 
 wait_for_http "http://localhost:${PHYSICAL_API_PORT}/api/version" "Physical Ryu" || true
 
 # 2. Physical Network (connects to already-running controller)
-tmux split-window -v -t $SESSION -c "$PROJECT_DIR"
-tmux send-keys -t $SESSION "echo '=== PHYSICAL NETWORK ===' && python3 net.py" C-m
+tmux split-window -v -t $PANE_PHYS_CTRL -c "$PROJECT_DIR"
+PANE_PHYS_NET=$(tmux display-message -p -t $SESSION -F "#{pane_id}")
+tmux send-keys -t $PANE_PHYS_NET "echo '=== PHYSICAL NETWORK ===' && python3 net.py" C-m
 
 # Wait for physical network to be discovered (topology version >= 1)
 print_step "Waiting for physical network topology..."
@@ -211,14 +227,16 @@ if [ "$TOPOLOGY_READY" -ne 1 ]; then
 fi
 
 # 3. Twin Ryu Controller
-tmux split-window -v -t $SESSION -c "$PROJECT_DIR"
-tmux send-keys -t $SESSION "echo '=== TWIN RYU CONTROLLER ===' && docker run --rm --network host -v \"$PROJECT_DIR\":/app -w /app -e SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" ${DOCKER_IMAGE} ryu-manager --observe-links --wsapi-port ${TWIN_API_PORT} --ofp-tcp-listen-port ${TWIN_CTRL_PORT} controller.py" C-m
+tmux split-window -h -t $PANE_PHYS_CTRL -c "$PROJECT_DIR"
+PANE_TWIN_CTRL=$(tmux display-message -p -t $SESSION -F "#{pane_id}")
+tmux send-keys -t $PANE_TWIN_CTRL "echo '=== TWIN RYU CONTROLLER ===' && docker run --rm --network host -v \"$PROJECT_DIR\":/app -w /app -e SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" ${DOCKER_IMAGE} ryu-manager --observe-links --wsapi-port ${TWIN_API_PORT} --ofp-tcp-listen-port ${TWIN_CTRL_PORT} controller.py" C-m
 
 wait_for_http "http://localhost:${TWIN_API_PORT}/api/version" "Twin Ryu" || true
 
 # 4. Digital Twin (fetches from now-ready physical controller)
-tmux split-window -v -t $SESSION -c "$PROJECT_DIR"
-tmux send-keys -t $SESSION "echo '=== DIGITAL TWIN ===' && SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" python3 twin.py --sync" C-m
+tmux split-window -h -t $PANE_PHYS_NET -c "$PROJECT_DIR"
+PANE_TWIN_NET=$(tmux display-message -p -t $SESSION -F "#{pane_id}")
+tmux send-keys -t $PANE_TWIN_NET "echo '=== DIGITAL TWIN ===' && SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" python3 twin.py --sync" C-m
 
 # Wait for physical network to have hosts discovered
 print_step "Waiting for hosts to be discovered..."
@@ -237,7 +255,18 @@ tmux send-keys -t $SESSION:Dashboard "echo '=== WEB DASHBOARD ===' && SDN_TWIN_A
 
 wait_for_port $DASHBOARD_PORT "Dashboard" || true
 
+if command -v xdg-open > /dev/null; then
+    print_step "Opening dashboard in browser..."
+    if [ -n "$SUDO_USER" ]; then
+        USER_UID=$(id -u "$SUDO_USER")
+        sudo -H -u "$SUDO_USER" env DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$USER_UID/bus" xdg-open "http://localhost:${DASHBOARD_PORT}" &> /dev/null &
+    else
+        xdg-open "http://localhost:${DASHBOARD_PORT}" &> /dev/null &
+    fi
+fi
+
 tmux select-window -t $SESSION:0
+tmux select-pane -t $PANE_PHYS_NET
 
 # ============================================================================
 #  Done
@@ -255,11 +284,11 @@ echo -e "  ${CYAN}Attach with:${NC}   tmux attach -t $SESSION"
 echo ""
 echo -e "  ${YELLOW}Pane layout:${NC}"
 echo -e "    ┌──────────────────┬──────────────────┐"
-echo -e "    │  Physical Net    │  Physical Ctrl   │"
-echo -e "    │  (net.py)        │  (Ryu Docker)    │"
+echo -e "    │  Physical Ctrl   │  Twin Ctrl       │"
+echo -e "    │  (Ryu Docker)    │  (Ryu Docker)    │"
 echo -e "    ├──────────────────┼──────────────────┤"
-echo -e "    │  Digital Twin    │  Twin Ctrl       │"
-echo -e "    │  (twin.py)       │  (Ryu Docker)    │"
+echo -e "    │  Physical Net    │  Digital Twin    │"
+echo -e "    │  (net.py)        │  (twin.py)       │"
 echo -e "    └──────────────────┴──────────────────┘"
 echo -e "    Tab 2: Dashboard (Flask)"
 echo ""
@@ -272,7 +301,7 @@ echo -e "    5. Run:  h1 iperf -c 10.0.0.2 -t 30 &"
 echo -e "    6. Open browser: http://localhost:${DASHBOARD_PORT}"
 echo ""
 echo -e "  ${RED}To stop everything:${NC}"
-echo -e "    sudo ./stop.sh"
+echo -e "    sudo ./start.sh --stop"
 echo ""
 echo -e "  ${YELLOW}Tmux Navigation:${NC}"
 echo -e "    Switch pane:    Ctrl+B  then  Arrow Keys"
@@ -286,11 +315,11 @@ tmux attach -t $SESSION
 if ! tmux has-session -t $SESSION 2>/dev/null; then
     echo ""
     echo -e "${YELLOW}Tmux session closed. Running automatic cleanup...${NC}"
-    "$PROJECT_DIR/stop.sh"
+    cleanup
 else
     echo ""
     echo -e "${YELLOW}Detached from tmux session. It is still running in the background.${NC}"
     echo -e "To re-attach:  tmux attach -t $SESSION"
-    echo -e "To stop:       sudo ./stop.sh"
+    echo -e "To stop:       sudo ./start.sh --stop"
     echo ""
 fi
