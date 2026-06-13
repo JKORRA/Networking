@@ -52,12 +52,12 @@ The system exploits the **Ryu Northbound REST API** to retrieve topology and tra
 │  │  MACs: 00:00:00:...   │    │  MACs: 00:00:00:...           │  │
 │  └───────────┬────────────┘    └──────────────┬─────────────────┘  │
 │              │                                │                    │
-│       ┌──────┴──────┐               ┌─────────┴──────┐            │
-│       │ Ryu Ctrl #1 │               │  Ryu Ctrl #2   │            │
-│       │ (Docker)    │               │  (Docker)      │            │
-│       │ Port 6633   │               │  Port 6634     │            │
-│       │ API: 8080   │               │  API: 8081     │            │
-│       └──────┬──────┘               └────────────────┘            │
+│       ┌──────┴──────┐                                             │
+│       │ Ryu Ctrl #1 │                                             │
+│       │ (Docker)    │                                             │
+│       │ Port 6633   │                                             │
+│       │ API: 8080   │                                             │
+│       └──────┬──────┘                                             │
 │              │                                                     │
 │       ┌──────┴──────┐                                             │
 │       │  Dashboard  │  ◄── Fetches /api/topology + /api/traffic   │
@@ -73,10 +73,11 @@ The system exploits the **Ryu Northbound REST API** to retrieve topology and tra
 | Feature | Description |
 |---|---|
 | **Automated Topology Replication** | Fetches real-time switch, link, and host data via Ryu REST API and builds an identical Mininet clone |
-| **IP & MAC Fidelity** | The twin uses the identical IP (`10.0.0.x`) and MAC addresses as the physical network, leveraging strict Mininet network namespaces for 100% control-plane accuracy |
-| **Traffic Monitoring** | Polls OpenFlow `OFPPortStatsRequest` and `OFPFlowStatsRequest` to calculate real-time Rx/Tx Mbps per port and per flow |
-| **Flow-Based Emulation** | Detects active end-to-end IP flows >1 Mbps and auto-spawns exact `iperf3` client/server replicas between twin hosts |
-| **Dynamic Sync** | Background thread detects topology changes (link up/down, new hosts, dynamic switches) and reproduces them identically at runtime |
+| **True Control-Plane Mirroring** | Twin switches operate entirely in `failMode=secure` without a local SDN controller. They passively mirror the physical network by dynamically injecting raw OpenFlow rules via `ovs-ofctl dump-flows/replace-flows`. |
+| **IP & MAC Fidelity** | The twin uses identically sorted MACs and IP addresses (`10.0.0.x`), leveraging strict Mininet network namespaces for 100% data-plane replication accuracy. |
+| **Traffic Monitoring** | Polls OpenFlow `OFPPortStatsRequest` and `OFPFlowStatsRequest` to calculate real-time Rx/Tx Mbps per port and per flow. |
+| **Flow-Based Emulation** | Detects active end-to-end IP flows >1 Mbps and auto-spawns exact `iperf3` client/server replicas between twin hosts. |
+| **Dynamic Topology Sync** | Background thread detects topology changes (link up/down, new hosts). The Twin dynamically stitches new physical interfaces at runtime using identical Mininet port numbers. |
 | **Web Dashboard** | Real-time WebSocket (Socket.IO) dashboard with interactive nodes, live event logs, active flows table, and traffic heatmaps |
 | **ETag Caching** | High-frequency API polling (2s interval) optimized by zero-payload `304 Not Modified` responses to virtually eliminate control-plane overhead |
 | **Bearer Authentication** | Enforces secure access for all Northbound REST API endpoints, the dashboard, and external twin integrations |
@@ -112,9 +113,9 @@ The system exploits the **Ryu Northbound REST API** to retrieve topology and tra
   - REST API endpoints: `/api/topology`, `/api/switches`, `/api/links`, `/api/hosts`, `/api/traffic`, `/api/version`
 
 - **`twin.py`** — The main Digital Twin engine:
-  - Fetches the physical topology via REST API with retry logic
-  - Builds an isolated Mininet replica with 100% identical IPs and MACs
-  - Runs a background synchronization loop detecting topology and traffic changes
+  - Fetches the physical topology via REST API
+  - Builds an isolated Mininet replica with 100% identical IPs, MACs, and port mappings
+  - Runs a background synchronization loop dynamically cloning physical OpenFlow tables into the twin kernel (`ovs-ofctl`)
   - Spawns `iperf3` inside twin hosts to emulate detected traffic loads
 
 - **`dashboard.py`** — A Flask application that proxies data from Ryu and serves the web dashboard.
@@ -238,21 +239,13 @@ Switch datapath id 2 CONNECTED
 Switch datapath id 3 CONNECTED
 ```
 
-### Step 3 — Start the Twin Ryu Controller
-
-This is a second, independent Ryu controller for the twin network, running on different ports:
-
-```bash
-sudo docker run -it --network host -v $(pwd):/app -w /app my-ryu ryu-manager --observe-links --wsapi-port 8081 --ofp-tcp-listen-port 6634 controller.py
-```
-
-### Step 4 — Start the Digital Twin
+### Step 3 — Start the Digital Twin
 
 ```bash
 sudo python3 twin.py --sync
 ```
 
-The `--sync` flag enables continuous background synchronization (topology changes + traffic emulation).
+The `--sync` flag enables continuous background synchronization (topology discovery, dynamic link stitching, and control-plane mirroring).
 
 You should see:
 ```
@@ -263,7 +256,7 @@ Building digital twin topology...
 Started topology synchronization (interval: 10s)
 ```
 
-### Step 5 — Start the Web Dashboard
+### Step 4 — Start the Web Dashboard
 
 ```bash
 python3 dashboard.py
@@ -287,7 +280,7 @@ mininet> pingall
 
 This discovers all hosts in the topology. Go back to the **Dashboard** — you should see all 3 switches and 3 hosts rendered as an interactive graph.
 
-In **Terminal 4** (twin network's `mininet>` prompt):
+In **Terminal 3** (twin network's `mininet>` prompt):
 
 ```bash
 mininet> pingall
@@ -307,7 +300,7 @@ This generates a burst of TCP traffic between `h1` and `h2`. After ~5 seconds:
 
 1. **Dashboard**: The edges between the involved switches will turn **yellow** or **red**, and the traffic labels will show the Mbps values. The Active Flows table will list the `10.0.0.1 -> 10.0.0.2` flow.
 
-2. **Twin** (Terminal 4): The sync loop will detect the traffic and automatically spawn `iperf3` client-server background processes inside the corresponding twin hosts to perfectly replicate the load.
+2. **Twin** (Terminal 3): The sync loop will clone the OpenFlow traffic rules allowing packets to pass, and spawn `iperf3` client-server processes inside the twin hosts to replicate the physical bandwidth load.
 
 **Important:** For sustained traffic that shows the heatmap change in real time, you must start an `iperf` TCP server listener on the destination host before running the client:
 
@@ -354,11 +347,10 @@ Because Mininet strictly isolates hosts inside Linux Network Namespaces (`netns`
 | Property | Physical Network | Digital Twin |
 |---|---|---|
 | IP Range | `10.0.0.x/24` | `10.0.0.x/24` |
-| MAC Prefix | `00:00:00:00:00:xx` | `00:00:00:00:00:xx` |
+| MAC Prefix | `00:00:00:00:00:xx` | identically mapped |
 | Switch Names | `s1`, `s2`, `s3` | `twin_s1`, `twin_s2`, `twin_s3` |
-| Host Names | `h1`, `h2`, `h3` | `twin_h1`, `twin_h2`, `twin_h3` |
-| Controller Port | `6633` | `6634` |
-| REST API Port | `8080` | `8081` |
+| Port Mappings| e.g. `s1-eth2` | `twin_s1-eth2` (Strict Fidelity) |
+| Flow Tables  | Installed by Ryu | Mirrored via `ovs-ofctl` |
 
 ### Traffic Monitoring and Emulation
 
@@ -461,5 +453,5 @@ Alternatively, run the cleanup commands manually:
 ```bash
 sudo mn -c                          # Clean up Mininet
 sudo docker stop $(sudo docker ps -q)   # Stop all Docker containers
-sudo fuser -k 6633/tcp 6634/tcp 8080/tcp 8081/tcp 5000/tcp  # Free ports
+sudo fuser -k 6633/tcp 8080/tcp 5000/tcp  # Free ports
 ```
