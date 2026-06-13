@@ -208,7 +208,7 @@ tmux send-keys -t $PANE_PHYS_CTRL "echo '=== PHYSICAL RYU CONTROLLER ===' && doc
 wait_for_http "http://localhost:${PHYSICAL_API_PORT}/api/version" "Physical Ryu" || true
 
 # 2. Physical Network (connects to already-running controller)
-tmux split-window -v -t $PANE_PHYS_CTRL -c "$PROJECT_DIR"
+tmux split-window -h -t $PANE_PHYS_CTRL -c "$PROJECT_DIR"
 PANE_PHYS_NET=$(tmux display-message -p -t $SESSION -F "#{pane_id}")
 tmux select-pane -t $PANE_PHYS_NET -T "Physical Network (Mininet)"
 tmux send-keys -t $PANE_PHYS_NET "echo '=== PHYSICAL NETWORK ===' && python3 net.py" C-m
@@ -229,16 +229,8 @@ if [ "$TOPOLOGY_READY" -ne 1 ]; then
     print_warn "Physical network topology not fully discovered, continuing anyway..."
 fi
 
-# 3. Twin Ryu Controller
-tmux split-window -h -t $PANE_PHYS_CTRL -c "$PROJECT_DIR"
-PANE_TWIN_CTRL=$(tmux display-message -p -t $SESSION -F "#{pane_id}")
-tmux select-pane -t $PANE_TWIN_CTRL -T "Twin Ryu Controller"
-tmux send-keys -t $PANE_TWIN_CTRL "echo '=== TWIN RYU CONTROLLER ===' && docker run --rm --network host -v \"$PROJECT_DIR\":/app -w /app -e SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" ${DOCKER_IMAGE} ryu-manager --observe-links --wsapi-port ${TWIN_API_PORT} --ofp-tcp-listen-port ${TWIN_CTRL_PORT} controller.py" C-m
-
-wait_for_http "http://localhost:${TWIN_API_PORT}/api/version" "Twin Ryu" || true
-
-# 4. Digital Twin (fetches from now-ready physical controller)
-tmux split-window -h -t $PANE_PHYS_NET -c "$PROJECT_DIR"
+# 3. Digital Twin (fetches from now-ready physical controller)
+tmux split-window -v -t $PANE_PHYS_NET -c "$PROJECT_DIR"
 PANE_TWIN_NET=$(tmux display-message -p -t $SESSION -F "#{pane_id}")
 tmux select-pane -t $PANE_TWIN_NET -T "Digital Twin (Mininet)"
 tmux send-keys -t $PANE_TWIN_NET "echo '=== DIGITAL TWIN ===' && SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" python3 twin.py --sync" C-m
@@ -254,10 +246,9 @@ for i in $(seq 1 45); do
     sleep 1
 done
 
-# 5. Dashboard
+# 4. Dashboard
 tmux new-window -t $SESSION -n "Dashboard" -c "$PROJECT_DIR"
 tmux send-keys -t $SESSION:Dashboard "echo '=== WEB DASHBOARD ===' && SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" \"$DASHBOARD_PYTHON\" dashboard.py" C-m
-
 wait_for_port $DASHBOARD_PORT "Dashboard" || true
 
 if command -v xdg-open > /dev/null; then

@@ -14,6 +14,7 @@ from mininet.log import setLogLevel, info, error, output
 from mininet.link import TCLink
 import threading
 import sys
+import subprocess
 RYU_URL = 'http://localhost:8080'
 TOPOLOGY_ENDPOINT = '/api/topology'
 FLOWS_ENDPOINT = '/api/flows'
@@ -147,7 +148,7 @@ class DigitalTwinTopo(Topo): # Mininet topology with port conflict detection
                 switch_name = f"twin_s{dpid_int}"
                 
                 self.switch_map[dpid_int] = switch_name
-                self.addSwitch(switch_name, dpid=dpid_hex)
+                self.addSwitch(switch_name, dpid=dpid_hex, failMode='secure')
                 info(f"    Added switch {switch_name} (dpid: {dpid_hex})\n")
     
     def _analyze_switch_links(self): # Analyze which ports are used for switch-to-switch links
@@ -170,6 +171,8 @@ class DigitalTwinTopo(Topo): # Mininet topology with port conflict detection
         for link in links:
             src_dpid = link.get('src_dpid')
             dst_dpid = link.get('dst_dpid')
+            src_port = link.get('src_port')
+            dst_port = link.get('dst_port')
             
             link_id = tuple(sorted([src_dpid, dst_dpid])) # Create unique link identifier (bidirectional)
             
@@ -180,13 +183,15 @@ class DigitalTwinTopo(Topo): # Mininet topology with port conflict detection
                 src_switch = self.switch_map[src_dpid]
                 dst_switch = self.switch_map[dst_dpid]
                 
-                # Let Mininet auto-assign ports for reliability
+                # Enforce identical port mapping for Control-Plane Mirroring
                 self.addLink(
                     src_switch, dst_switch,
+                    port1=src_port,
+                    port2=dst_port,
                     bw=100,
                     delay='2ms'
                 )
-                info(f"Linked {src_switch} <-> {dst_switch}\n")
+                info(f"Linked {src_switch} (port {src_port}) <-> {dst_switch} (port {dst_port})\n")
                 
                 added_links.add(link_id)
     
@@ -195,7 +200,7 @@ class DigitalTwinTopo(Topo): # Mininet topology with port conflict detection
         host_counter = 1
         hosts_added = 0
         
-        for mac, host_info in hosts.items():
+        for mac, host_info in sorted(hosts.items(), key=lambda item: item[0]):
             dpid = host_info.get('dpid')
             port = host_info.get('port')
             
@@ -229,10 +234,11 @@ class DigitalTwinTopo(Topo): # Mininet topology with port conflict detection
                 self.addLink(
                     host_name,
                     switch_name,
+                    port2=port,
                     bw=10,
                     delay='5ms'
                 )
-                info(f"Linked {host_name} to {switch_name}\n")
+                info(f"Linked {host_name} to {switch_name} (port {port})\n")
             
             host_counter += 1
             hosts_added += 1
@@ -281,18 +287,14 @@ class DigitalTwin: # Digital twin network with dynamic synchronization
         self.net = Mininet(
             topo=self.topo,
             link=TCLink,
+            controller=None,
             autoSetMacs=True,
             autoStaticArp=True,
             build=False
         )
         
-        info(f"Connecting to RYU controller at {CONTROLLER_IP}:{CONTROLLER_PORT}\n")
-        controller = RemoteController(
-            'twin_c0',
-            ip=CONTROLLER_IP,
-            port=CONTROLLER_PORT
-        )
-        self.net.addController(controller)
+        # Controller removed for True Control-Plane Mirroring. 
+        # Switches are in failMode='secure' and driven entirely by _sync_flow_tables
         
         self.net.build()
         
@@ -307,25 +309,13 @@ class DigitalTwin: # Digital twin network with dynamic synchronization
                     physical_ip = ipv4.split('/')[0]
                     self.created_hosts[physical_ip] = h
 
-        info("Starting digital twin network\n")
+        info("Starting digital twin network (No Controller)\n")
         self.net.start()
-        
-        info("Starting controller\n")
-        self.net.controllers[0].start()
         
         
         self._build_link_map() # Build link map for quick lookup
         
-        # Wait for switches to connect with timeout
-        info("Waiting for switches to connect to controller (max 30 seconds)\n")
-        try:
-            connected = self._wait_for_switches(timeout=30)
-            if connected:
-                info("All switches connected successfully\n")
-            else:
-                info("WARNING: Not all switches connected, but continuing...\n")
-        except Exception as e:
-            info(f"WARNING: Error waiting for switches: {e}\n")
+        # Controller removed for Control-Plane Mirroring. No need to wait for connection.
         
         time.sleep(2)
         
@@ -430,6 +420,9 @@ class DigitalTwin: # Digital twin network with dynamic synchronization
                 if traffic_data:
                     self._handle_traffic(traffic_data)
                 
+                # Sync raw OpenFlow tables for Control-Plane Mirroring
+                self._sync_flow_tables()
+                
                 # Fetch latest topology efficiently using ETag caching
                 topology_data, new_etag = _fetch_json_cached(TOPOLOGY_ENDPOINT, RYU_URL, timeout=5, etag=last_etag)
                 
@@ -482,6 +475,46 @@ class DigitalTwin: # Digital twin network with dynamic synchronization
             result = src_host.cmd(cmd)
             self._track_iperf3_pid(src_host, result)
 
+    def _sync_flow_tables(self):
+        try:
+            for switch in self.net.switches:
+                if not switch.name.startswith('twin_s'):
+                    continue
+                
+                physical_switch = switch.name.replace('twin_', '')
+                
+                # Fetch raw OpenFlow table from the physical switch
+                cmd = f"ovs-ofctl dump-flows {physical_switch} -O OpenFlow13 --no-stats"
+                try:
+                    flows = subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL).decode('utf-8')
+                except subprocess.CalledProcessError:
+                    continue # Physical switch might not exist yet
+                
+                # Filter out the header (NXST_FLOW/OFPST_FLOW) and clean lines
+                flow_lines = []
+                for line in flows.splitlines():
+                    line = line.strip()
+                    if line.startswith('NXST_FLOW') or line.startswith('OFPST_FLOW') or not line:
+                        continue
+                    flow_lines.append(line)
+                
+                if not flow_lines:
+                    output(f"No flows found on {physical_switch} to sync to {switch.name}\n")
+                    continue
+                    
+                # Write to temp file and replace
+                tmp_file = f"/tmp/{switch.name}_flows.txt"
+                with open(tmp_file, 'w') as f:
+                    f.write('\n'.join(flow_lines) + '\n')
+                
+                replace_cmd = f"ovs-ofctl replace-flows {switch.name} {tmp_file} -O OpenFlow13"
+                result = subprocess.run(replace_cmd, shell=True, capture_output=True, text=True)
+                if result.returncode != 0:
+                    error(f"Flow replace error on {switch.name}: {result.stderr}\n")
+                
+        except Exception as e:
+            error(f"Flow table sync error: {e}\n")
+
     def _track_iperf3_pid(self, host, cmd_output):
         pids = []
         for line in cmd_output.split('\n'):
@@ -529,9 +562,11 @@ class DigitalTwin: # Digital twin network with dynamic synchronization
             output(f"Links ADDED: {len(added_links)}\n")
             for link_key in added_links:
                 dpid1 = link_key[0][0]
+                port1 = link_key[0][1]
                 dpid2 = link_key[1][0]
-                output(f"     - s{dpid1} <-> s{dpid2}\n")
-                self._bring_link_up(dpid1, dpid2)
+                port2 = link_key[1][1]
+                output(f"     - s{dpid1} (port {port1}) <-> s{dpid2} (port {port2})\n")
+                self._bring_link_up(dpid1, dpid2, port1, port2)
         
         # 2. Handle HOST changes
         old_hosts = set(old_topology.get('hosts', {}).keys())
@@ -586,7 +621,7 @@ class DigitalTwin: # Digital twin network with dynamic synchronization
         else:
             output(f"Link twin_s{dpid1} <-> twin_s{dpid2} not found in link map\n")
     
-    def _bring_link_up(self, dpid1, dpid2): # Bring up a link between two switches
+    def _bring_link_up(self, dpid1, dpid2, port1, port2): # Bring up a link between two switches
         link_key = tuple(sorted([dpid1, dpid2]))
         
         if link_key in self.link_map:
@@ -598,7 +633,23 @@ class DigitalTwin: # Digital twin network with dynamic synchronization
             
             output(f"Brought up link twin_s{dpid1} <-> twin_s{dpid2}\n")
         else:
-            output(f"Link twin_s{dpid1} <-> twin_s{dpid2} not found in link map\n")
+            # Dynamic New Link Creation
+            switch1_name = f"twin_s{dpid1}"
+            switch2_name = f"twin_s{dpid2}"
+            
+            s1 = next((s for s in self.net.switches if s.name == switch1_name), None)
+            s2 = next((s for s in self.net.switches if s.name == switch2_name), None)
+            
+            if s1 and s2:
+                link = self.net.addLink(s1, s2, port1=port1, port2=port2, bw=100, delay='2ms')
+                s1.attach(link.intf1.name)
+                s2.attach(link.intf2.name)
+                link.intf1.ifconfig('up')
+                link.intf2.ifconfig('up')
+                self.link_map[link_key] = link
+                output(f"Dynamically created NEW link {switch1_name} (port {port1}) <-> {switch2_name} (port {port2})\n")
+            else:
+                output(f"Link twin_s{dpid1} <-> twin_s{dpid2} not found, and switches don't exist\n")
     
     def _add_host_dynamically(self, mac, host_info):
         try:
@@ -620,8 +671,9 @@ class DigitalTwin: # Digital twin network with dynamic synchronization
             else:
                 ip_with_mask = f"10.0.0.{self.host_counter}/24"
 
+            port = host_info.get('port')
             host = self.net.addHost(host_name, cls=Host, ip=ip_with_mask, mac=mac)
-            link = self.net.addLink(host, switch, bw=10, delay='5ms')
+            link = self.net.addLink(host, switch, port2=port, bw=10, delay='5ms')
             host.configDefault()
             switch.attach(link.intf2.name)
             link.intf1.ifconfig('up')
@@ -654,7 +706,7 @@ class DigitalTwin: # Digital twin network with dynamic synchronization
             dpid_hex = format(dpid_int, '016x')
             switch_name = f"twin_s{dpid_int}"
             
-            switch = self.net.addSwitch(switch_name, dpid=dpid_hex)
+            switch = self.net.addSwitch(switch_name, dpid=dpid_hex, failMode='secure')
             switch.start(self.net.controllers)
             output(f"Added switch {switch_name} (dpid: {dpid_hex})\n")
         except Exception as e:
@@ -800,8 +852,7 @@ def main():
         if args.sync:
             twin.start_sync()
         
-        # Run connectivity test
-        twin.test()
+        twin.start_sync()
         
         twin.start_cli()
     
