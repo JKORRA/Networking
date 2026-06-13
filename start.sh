@@ -200,7 +200,9 @@ print_step "Starting tmux session '${SESSION}'..."
 
 # 1. Physical Ryu Controller FIRST (must be ready before Mininet connects)
 tmux new-session -d -s $SESSION -n "SDN-Twin" -c "$PROJECT_DIR"
+tmux set-option -t $SESSION pane-border-status top
 PANE_PHYS_CTRL=$(tmux display-message -p -t $SESSION -F "#{pane_id}")
+tmux select-pane -t $PANE_PHYS_CTRL -T "Physical Ryu Controller"
 tmux send-keys -t $PANE_PHYS_CTRL "echo '=== PHYSICAL RYU CONTROLLER ===' && docker run --rm --network host -v \"$PROJECT_DIR\":/app -w /app -e SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" ${DOCKER_IMAGE} ryu-manager --observe-links controller.py" C-m
 
 wait_for_http "http://localhost:${PHYSICAL_API_PORT}/api/version" "Physical Ryu" || true
@@ -208,6 +210,7 @@ wait_for_http "http://localhost:${PHYSICAL_API_PORT}/api/version" "Physical Ryu"
 # 2. Physical Network (connects to already-running controller)
 tmux split-window -v -t $PANE_PHYS_CTRL -c "$PROJECT_DIR"
 PANE_PHYS_NET=$(tmux display-message -p -t $SESSION -F "#{pane_id}")
+tmux select-pane -t $PANE_PHYS_NET -T "Physical Network (Mininet)"
 tmux send-keys -t $PANE_PHYS_NET "echo '=== PHYSICAL NETWORK ===' && python3 net.py" C-m
 
 # Wait for physical network to be discovered (topology version >= 1)
@@ -229,6 +232,7 @@ fi
 # 3. Twin Ryu Controller
 tmux split-window -h -t $PANE_PHYS_CTRL -c "$PROJECT_DIR"
 PANE_TWIN_CTRL=$(tmux display-message -p -t $SESSION -F "#{pane_id}")
+tmux select-pane -t $PANE_TWIN_CTRL -T "Twin Ryu Controller"
 tmux send-keys -t $PANE_TWIN_CTRL "echo '=== TWIN RYU CONTROLLER ===' && docker run --rm --network host -v \"$PROJECT_DIR\":/app -w /app -e SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" ${DOCKER_IMAGE} ryu-manager --observe-links --wsapi-port ${TWIN_API_PORT} --ofp-tcp-listen-port ${TWIN_CTRL_PORT} controller.py" C-m
 
 wait_for_http "http://localhost:${TWIN_API_PORT}/api/version" "Twin Ryu" || true
@@ -236,6 +240,7 @@ wait_for_http "http://localhost:${TWIN_API_PORT}/api/version" "Twin Ryu" || true
 # 4. Digital Twin (fetches from now-ready physical controller)
 tmux split-window -h -t $PANE_PHYS_NET -c "$PROJECT_DIR"
 PANE_TWIN_NET=$(tmux display-message -p -t $SESSION -F "#{pane_id}")
+tmux select-pane -t $PANE_TWIN_NET -T "Digital Twin (Mininet)"
 tmux send-keys -t $PANE_TWIN_NET "echo '=== DIGITAL TWIN ===' && SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" python3 twin.py --sync" C-m
 
 # Wait for physical network to have hosts discovered
