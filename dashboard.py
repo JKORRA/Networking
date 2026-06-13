@@ -86,19 +86,22 @@ def background_thread():
                 traffic, traffic_etag = traffic_future.result()
                 flows, flows_etag = flows_future.result()
 
-                if topology:
-                    logs = generate_logs(last_topology, topology)
-                    if logs:
-                        socketio.emit('event_logs', logs)
-                    last_topology = topology
+                if topology is None and topo_etag is None:
+                    socketio.emit('status', {'error': 'Could not fetch data from RYU'})
+                else:
+                    current_topo = topology if topology else last_topology
+                    if topology:
+                        logs = generate_logs(last_topology, topology)
+                        if logs:
+                            socketio.emit('event_logs', logs)
+                        last_topology = topology
+                    
                     last_payload = {
-                        'topology': topology,
+                        'topology': current_topo,
                         'traffic': traffic or {},
                         'flows': flows or {}
                     }
                     socketio.emit('update_data', last_payload)
-                else:
-                    socketio.emit('status', {'error': 'Could not fetch data from RYU'})
             except Exception as e:
                 logging.error(f"Background poll error: {e}")
                 socketio.emit('status', {'error': f'Poll failed: {str(e)}'})

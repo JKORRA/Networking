@@ -186,11 +186,9 @@ class NetworkController(app_manager.RyuApp):
                     match = parser.OFPMatch(eth_type=ether_types.ETH_TYPE_IP, eth_dst=dst, eth_src=src, ipv4_src=ip_pkt.src, ipv4_dst=ip_pkt.dst)
                 else:
                     match = parser.OFPMatch(eth_dst=dst)
-                if msg.buffer_id != ofproto.OFP_NO_BUFFER:
-                    self.add_flow(datapath, 1, match, actions, msg.buffer_id)
-                    return
-                else:
-                    self.add_flow(datapath, 1, match, actions)
+                
+                # ALWAYS install flow without buffer_id to prevent the switch from dropping it
+                self.add_flow(datapath, 1, match, actions)
             
             data = None
             if msg.buffer_id == ofproto.OFP_NO_BUFFER:
