@@ -10,9 +10,9 @@
     <script type="text/javascript" src="/static/vis-network.min.js"></script>
     <style>
         :root {
-            --bg-dark: #0f172a;
-            --glass-bg: rgba(30, 41, 59, 0.7);
-            --glass-border: rgba(255, 255, 255, 0.1);
+            --bg-dark: #0b101e;
+            --glass-bg: rgba(15, 23, 42, 0.5);
+            --glass-border: rgba(255, 255, 255, 0.08);
             --accent-blue: #38bdf8;
             --accent-pink: #f472b6;
             --text-main: #f8fafc;
@@ -20,6 +20,7 @@
             --glow-low: #22c55e;
             --glow-med: #eab308;
             --glow-high: #ef4444;
+            --panel-radius: 16px;
         }
 
         body {
@@ -29,41 +30,329 @@
             background-color: var(--bg-dark);
             color: var(--text-main);
             overflow: hidden;
-            display: grid;
-            grid-template-rows: auto 1fr;
+            width: 100vw;
             height: 100vh;
         }
 
+        /* Animated Dark Background */
         .bg-mesh {
             position: absolute;
-            top: -50%;
-            left: -50%;
-            width: 200%;
-            height: 200%;
-            background: radial-gradient(circle at 50% 50%, rgba(56, 189, 248, 0.05) 0%, transparent 50%),
-                radial-gradient(circle at 80% 20%, rgba(244, 114, 182, 0.05) 0%, transparent 40%);
+            top: 0; left: 0; width: 100vw; height: 100vh;
+            background: 
+                radial-gradient(circle at 15% 50%, rgba(56, 189, 248, 0.08) 0%, transparent 40%),
+                radial-gradient(circle at 85% 30%, rgba(244, 114, 182, 0.05) 0%, transparent 40%);
             z-index: 0;
             pointer-events: none;
+            animation: breathe 10s infinite alternate;
         }
 
-        header {
-            position: relative;
+        @keyframes breathe {
+            0% { transform: scale(1); opacity: 0.8; }
+            100% { transform: scale(1.05); opacity: 1; }
+        }
+
+        /* Fullscreen Network Container */
+        #mynetwork {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100vw; height: 100vh;
+            z-index: 1;
+            outline: none;
+        }
+
+        /* Floating Panels Container */
+        .floating-ui {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
             z-index: 10;
-            padding: 15px 30px;
+            pointer-events: none; /* Let clicks pass through to network */
+        }
+
+        /* Panel Common Styles */
+        .panel {
+            pointer-events: auto; /* Enable clicks inside panels */
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+            border-radius: var(--panel-radius);
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.4);
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            animation: slideIn 0.5s ease-out backwards;
+            transition: transform 0.3s ease, border-color 0.3s ease, height 0.3s ease;
+        }
+        
+        .panel:hover {
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+
+        /* Collapse Mechanism */
+        .panel-header-wrap {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            background: var(--glass-bg);
-            backdrop-filter: blur(12px);
-            border-bottom: 1px solid var(--glass-border);
+            margin-bottom: 15px;
+            cursor: pointer;
+        }
+        
+        .panel-header-wrap h3 {
+            margin: 0;
+            font-size: 0.9rem;
+            color: var(--accent-blue);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 600;
+        }
+        
+        .collapse-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            cursor: pointer;
+            padding: 0;
+            width: 20px; height: 20px;
+            display: flex; align-items: center; justify-content: center;
+            border-radius: 4px;
+            transition: background 0.2s, color 0.2s, transform 0.3s;
+        }
+        .panel-header-wrap:hover .collapse-btn {
+            background: rgba(255,255,255,0.1);
+            color: var(--text-main);
         }
 
-        h1 {
+        .panel-content {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            flex-grow: 1;
+            transition: opacity 0.3s ease, max-height 0.3s ease;
+            max-height: 400px;
+            opacity: 1;
+        }
+
+        .panel.collapsed .panel-content {
+            max-height: 0;
+            opacity: 0;
             margin: 0;
-            font-size: 1.3rem;
+            padding: 0;
+            flex-grow: 0;
+        }
+        .panel.collapsed .panel-header-wrap {
+            margin-bottom: 0;
+        }
+        .panel.collapsed .collapse-btn {
+            transform: rotate(180deg);
+        }
+        
+        .panel-header .panel-header-wrap { cursor: default; }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Positioning */
+        .panel-header {
+            position: absolute;
+            top: 25px; left: 25px;
+            width: 280px;
+            animation-delay: 0.1s;
+        }
+
+        .panel-details {
+            position: absolute;
+            top: 25px; right: 25px;
+            width: 280px;
+            animation-delay: 0.2s;
+        }
+
+        .panel-flows {
+            position: absolute;
+            bottom: 25px; left: 25px;
+            width: 350px;
+            height: 250px;
+            animation-delay: 0.3s;
+        }
+
+        .panel-logs {
+            position: absolute;
+            bottom: 25px; right: 25px;
+            width: 320px;
+            height: 250px;
+            animation-delay: 0.4s;
+        }
+        
+        .panel-flows.collapsed, .panel-logs.collapsed, .panel-details.collapsed {
+            height: auto;
+        }
+
+        .network-controls {
+            position: absolute;
+            bottom: 25px; left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 12px;
+            pointer-events: auto;
+            background: var(--glass-bg);
+            backdrop-filter: blur(20px);
+            padding: 8px 12px;
+            border-radius: 50px;
+            border: 1px solid var(--glass-border);
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+            animation: slideIn 0.5s ease-out backwards;
+            animation-delay: 0.5s;
+        }
+
+        /* Stats Grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-top: 15px;
+        }
+
+        .stat-card {
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 10px;
+            padding: 12px;
+            text-align: center;
+        }
+        
+        .stat-card.full-width {
+            grid-column: 1 / -1;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            margin-bottom: 5px;
+            letter-spacing: 0.5px;
+        }
+
+        .stat-value {
+            font-size: 1.6rem;
+            font-weight: 600;
+            color: var(--text-main);
+        }
+
+        /* Buttons */
+        .icon-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-main);
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .icon-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--accent-blue);
+        }
+
+        .icon-btn:active {
+            transform: scale(0.9);
+        }
+
+        /* Tables & Scrollbars */
+        .custom-table-container, .log-entries {
+            overflow-y: auto;
+            flex-grow: 1;
+            padding-right: 5px;
+        }
+
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: rgba(0, 0, 0, 0.1);
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 10px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .custom-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+
+        .custom-table th, .custom-table td {
+            text-align: left;
+            padding: 8px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .custom-table tr {
+            transition: background 0.2s ease;
+        }
+
+        .custom-table tbody tr:hover {
+            background: rgba(255, 255, 255, 0.03);
+        }
+
+        .custom-table th {
+            color: var(--text-muted);
+            font-weight: 600;
+        }
+
+        /* Logs */
+        .log-entries {
+            font-size: 0.85rem;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .log-entry {
+            margin: 0;
+            padding: 8px 10px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 6px;
+            border-left: 3px solid transparent;
+            transition: transform 0.2s ease;
+        }
+        
+        .log-entry:hover {
+            transform: translateX(2px);
+        }
+
+        .log-entry.add { border-left-color: var(--glow-low); }
+        .log-entry.remove { border-left-color: var(--glow-high); }
+
+        .log-time { color: var(--text-muted); margin-right: 8px; }
+        .log-add { color: var(--glow-low); }
+        .log-remove { color: var(--glow-high); }
+
+        /* Header / Logo */
+        header {
             display: flex;
             align-items: center;
             gap: 12px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid var(--glass-border);
+        }
+        
+        h1 {
+            margin: 0;
+            font-size: 1.1rem;
+            font-weight: 600;
+            letter-spacing: 1px;
         }
 
         .pulse-dot {
@@ -76,149 +365,11 @@
         }
 
         @keyframes pulse {
-            0% {
-                transform: scale(0.95);
-                box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7);
-            }
-
-            70% {
-                transform: scale(1);
-                box-shadow: 0 0 0 10px rgba(34, 197, 94, 0);
-            }
-
-            100% {
-                transform: scale(0.95);
-                box-shadow: 0 0 0 0 rgba(34, 197, 94, 0);
-            }
+            0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.7); }
+            70% { transform: scale(1); box-shadow: 0 0 0 10px rgba(34, 197, 94, 0); }
+            100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); }
         }
-
-        .main-container {
-            display: grid;
-            grid-template-columns: 250px 1fr 300px;
-            grid-template-rows: 1fr 200px;
-            gap: 15px;
-            padding: 15px;
-            height: calc(100vh - 60px);
-            box-sizing: border-box;
-            position: relative;
-            z-index: 5;
-        }
-
-        .panel {
-            background: var(--glass-bg);
-            backdrop-filter: blur(12px);
-            border: 1px solid var(--glass-border);
-            border-radius: 12px;
-            padding: 15px;
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-        }
-
-        .panel h3 {
-            margin: 0 0 10px 0;
-            font-size: 1rem;
-            color: var(--accent-blue);
-            border-bottom: 1px solid var(--glass-border);
-            padding-bottom: 8px;
-        }
-
-        .network-wrapper {
-            grid-column: 2 / 3;
-            grid-row: 1 / 2;
-            position: relative;
-            border-radius: 12px;
-            border: 1px solid var(--glass-border);
-            overflow: hidden;
-            background: transparent;
-        }
-
-        #mynetwork {
-            width: 100%;
-            height: 100%;
-            position: absolute;
-            top: 0;
-            left: 0;
-            outline: none;
-        }
-
-        .network-controls {
-            position: absolute;
-            bottom: 15px;
-            right: 15px;
-            display: flex;
-            gap: 10px;
-            z-index: 10;
-        }
-
-        .icon-btn {
-            background: var(--glass-bg);
-            border: 1px solid var(--glass-border);
-            color: var(--text-main);
-            border-radius: 8px;
-            width: 36px;
-            height: 36px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            transition: all 0.2s ease;
-            backdrop-filter: blur(4px);
-            padding: 0;
-        }
-
-        .icon-btn:hover {
-            background: rgba(56, 189, 248, 0.2);
-            border-color: var(--accent-blue);
-            color: var(--accent-blue);
-        }
-
-        .icon-btn:active {
-            transform: scale(0.95);
-        }
-
-        .side-stats {
-            grid-column: 1 / 2;
-            grid-row: 1 / 3;
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-        }
-
-        .glass-card {
-            background: rgba(15, 23, 42, 0.4);
-            border: 1px solid var(--glass-border);
-            border-radius: 8px;
-            padding: 15px;
-            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
-        }
-
-        .stat-label {
-            font-size: 0.8rem;
-            color: var(--text-muted);
-            text-transform: uppercase;
-            margin-bottom: 5px;
-        }
-
-        .stat-value {
-            font-size: 1.8rem;
-            font-weight: 600;
-            color: var(--accent-blue);
-        }
-
-        .stat-value.pink {
-            color: var(--accent-pink);
-        }
-
-        .stat-value.total {
-            color: #f8fafc;
-        }
-
-        .details-panel {
-            grid-column: 3 / 4;
-            grid-row: 1 / 2;
-        }
-
+        
         .details-content {
             font-size: 0.9rem;
             line-height: 1.5;
@@ -226,182 +377,170 @@
         }
 
         .details-content p {
-            margin: 5px 0;
+            margin: 8px 0;
+            font-size: 0.9rem;
         }
-
         .details-content strong {
             color: var(--accent-blue);
+            display: inline-block;
+            width: 80px;
         }
-
-        .flows-panel {
-            grid-column: 2 / 3;
-            grid-row: 2 / 3;
-        }
-
-        .logs-panel {
-            grid-column: 3 / 4;
-            grid-row: 2 / 3;
-        }
-
-        .custom-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.85rem;
-        }
-
-        .custom-table th,
-        .custom-table td {
-            text-align: left;
-            padding: 6px;
-            border-bottom: 1px solid var(--glass-border);
-        }
-
-        .custom-table th {
-            color: var(--text-muted);
-            font-weight: 600;
-        }
-
-        .custom-table-container {
-            overflow-y: auto;
-            flex-grow: 1;
-        }
-
-        .log-entries {
-            overflow-y: auto;
-            flex-grow: 1;
-            font-size: 0.85rem;
-            font-family: monospace;
+        
+        .legend-row {
             display: flex;
-            flex-direction: column;
-            gap: 4px;
-        }
-
-        .log-entry {
-            margin: 0;
-            padding: 4px;
-            background: rgba(0, 0, 0, 0.2);
-            border-radius: 4px;
-        }
-
-        .log-time {
+            align-items: center;
+            gap: 8px;
+            font-size: 0.8rem;
             color: var(--text-muted);
-            margin-right: 8px;
+            margin-top: 6px;
         }
-
-        .log-add {
-            color: var(--glow-low);
-        }
-
-        .log-remove {
-            color: var(--glow-high);
+        .legend-dot {
+            width: 8px; height: 8px; border-radius: 50%;
         }
     </style>
 </head>
 
 <body>
     <div class="bg-mesh"></div>
-    <header>
-        <h1>
-            <div class="pulse-dot" id="status-dot"></div> Real Time Dashboard
-        </h1>
-    </header>
+    <div id="mynetwork"></div>
 
-    <div class="main-container">
-        <div class="side-stats panel">
-            <h3>Overview</h3>
-            <div class="glass-card">
-                <div class="stat-label">Switches</div>
-                <div class="stat-value" id="stat-switches">0</div>
-            </div>
-            <div class="glass-card">
-                <div class="stat-label">Hosts</div>
-                <div class="stat-value pink" id="stat-hosts">0</div>
-            </div>
-            <div class="glass-card">
-                <div class="stat-label">Traffic Rx</div>
-                <div class="stat-value total" id="stat-traffic">0 <span
-                        style="font-size: 1rem; color: var(--text-muted);">Mbps</span></div>
-            </div>
-
-            <div style="margin-top:auto">
-                <h4 style="margin: 0 0 10px; font-size: 0.85rem; color: var(--text-muted);">Legend</h4>
-                <div style="font-size: 0.8rem; display: flex; align-items: center; gap: 8px; margin-bottom: 5px;">
-                    <div style="width: 10px; height: 10px; border-radius: 50%; background: var(--glow-low);"></div> &lt;
-                    40% Util
+    <div class="floating-ui">
+        
+        <!-- Top Left: Overview (Not collapsible) -->
+        <div class="panel panel-header">
+            <header>
+                <div class="pulse-dot" id="status-dot"></div>
+                <h1>SDN Twin</h1>
+            </header>
+            
+            <div class="panel-content" style="margin-top:0;">
+                <div class="stats-grid" style="margin-top:0;">
+                    <div class="stat-card">
+                        <div class="stat-label">Switches</div>
+                        <div class="stat-value" style="color: var(--accent-blue);" id="stat-switches">0</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Hosts</div>
+                        <div class="stat-value" style="color: var(--accent-pink);" id="stat-hosts">0</div>
+                    </div>
+                    <div class="stat-card full-width">
+                        <div class="stat-label">Total Traffic Rx</div>
+                        <div class="stat-value" id="stat-traffic">0.00 <span style="font-size: 1rem; color: var(--text-muted);">Mbps</span></div>
+                    </div>
                 </div>
-                <div style="font-size: 0.8rem; display: flex; align-items: center; gap: 8px; margin-bottom: 5px;">
-                    <div style="width: 10px; height: 10px; border-radius: 50%; background: var(--glow-med);"></div> 40% -
-                    80% Util
-                </div>
-                <div style="font-size: 0.8rem; display: flex; align-items: center; gap: 8px;">
-                    <div style="width: 10px; height: 10px; border-radius: 50%; background: var(--glow-high);"></div>
-                    &gt; 80% Util
+                
+                <div style="margin-top: 15px; padding-top: 15px; border-top: 1px solid var(--glass-border);">
+                    <div style="font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; margin-bottom: 5px; letter-spacing: 0.5px;">Link Utilization Legend</div>
+                    <div class="legend-row"><div class="legend-dot" style="background: var(--glow-low);"></div> &lt; 40% Capacity</div>
+                    <div class="legend-row"><div class="legend-dot" style="background: var(--glow-med);"></div> 40% - 80% Capacity</div>
+                    <div class="legend-row"><div class="legend-dot" style="background: var(--glow-high);"></div> &gt; 80% Capacity</div>
                 </div>
             </div>
         </div>
 
-        <div class="network-wrapper">
-            <div id="mynetwork"></div>
-            <div class="network-controls">
-                <button class="icon-btn" id="btn-zoom-in" title="Zoom In">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
-                    </svg>
-                </button>
-                <button class="icon-btn" id="btn-zoom-out" title="Zoom Out">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M20 12H4" />
-                    </svg>
-                </button>
-                <button class="icon-btn" id="btn-fit" title="Fit to Screen">
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path stroke-linecap="round" stroke-linejoin="round"
-                            d="M4 4h6v2H6v4H4V4zm10 0h6v6h-2V6h-4V4zm6 10h2v6h-6v-2h4v-4zM4 14h2v4h4v2H4v-6z" />
-                    </svg>
-                </button>
+        <!-- Top Right: Details -->
+        <div class="panel panel-details collapsed" id="panel-details">
+            <div class="panel-header-wrap" onclick="togglePanel('panel-details')">
+                <h3>Interactive Details</h3>
+                <button class="collapse-btn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></button>
+            </div>
+            <div class="panel-content">
+                <div class="details-content" id="details-content">
+                    <div style="display:flex; align-items:center; justify-content:center; height: 100px; color: var(--text-muted); font-style: italic;">
+                        Click a node or edge to inspect
+                    </div>
+                </div>
             </div>
         </div>
 
-        <div class="details-panel panel">
-            <h3>Interactive Details</h3>
-            <div class="details-content" id="details-content">
-                <p style="color: var(--text-muted); font-style: italic;">Click a node/edge!</p>
+        <!-- Bottom Left: Active Flows -->
+        <div class="panel panel-flows collapsed" id="panel-flows">
+            <div class="panel-header-wrap" onclick="togglePanel('panel-flows')">
+                <h3>Active Flows Map</h3>
+                <button class="collapse-btn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></button>
+            </div>
+            <div class="panel-content">
+                <div class="custom-table-container">
+                    <table class="custom-table" id="flows-table">
+                        <thead>
+                            <tr>
+                                <th>Src IP</th>
+                                <th>Dst IP</th>
+                                <th>Bandwidth</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td colspan="3" style="text-align: center; color: var(--text-muted); padding: 20px;">No active flows</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
 
-        <div class="flows-panel panel">
-            <h3>Active Flows Map</h3>
-            <div class="custom-table-container">
-                <table class="custom-table" id="flows-table">
-                    <thead>
-                        <tr>
-                            <th>Src IP</th>
-                            <th>Dst IP</th>
-                            <th>Mbps</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr>
-                            <td colspan="3" style="text-align: center; color: var(--text-muted);">No active flows</td>
-                        </tr>
-                    </tbody>
-                </table>
+        <!-- Bottom Right: Logs -->
+        <div class="panel panel-logs" id="panel-logs">
+            <div class="panel-header-wrap" onclick="togglePanel('panel-logs')">
+                <h3>Event Log</h3>
+                <button class="collapse-btn"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></button>
+            </div>
+            <div class="panel-content">
+                <div class="log-entries" id="log-entries">
+                    <div class="log-entry add"><span class="log-time">Now</span> <span class="log-add">System started.</span></div>
+                </div>
             </div>
         </div>
 
-        <div class="logs-panel panel">
-            <h3>Event Log</h3>
-            <div class="log-entries" id="log-entries">
-                <div class="log-entry"><span class="log-time">Now</span> System started.</div>
-            </div>
+        <!-- Bottom Center: Controls -->
+        <div class="network-controls">
+            <button class="icon-btn" id="btn-zoom-in" title="Zoom In">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+                </svg>
+            </button>
+            <button class="icon-btn" id="btn-fit" title="Fit to Screen">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M4 4h6v2H6v4H4V4zm10 0h6v6h-2V6h-4V4zm6 10h2v6h-6v-2h4v-4zM4 14h2v4h4v2H4v-6z" />
+                </svg>
+            </button>
+            <button class="icon-btn" id="btn-zoom-out" title="Zoom Out">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M20 12H4" />
+                </svg>
+            </button>
         </div>
     </div>
 
     <script type="text/javascript">
+        function togglePanel(id) {
+            document.getElementById(id).classList.toggle('collapsed');
+        }
+
         const socket = io();
 
-        const svgSwitch = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><rect x="10" y="30" width="80" height="40" rx="5" fill="#1e293b" stroke="#38bdf8" stroke-width="3"/><circle cx="25" cy="50" r="4" fill="#38bdf8"/><circle cx="40" cy="50" r="4" fill="#38bdf8"/><circle cx="55" cy="50" r="4" fill="#38bdf8"/><circle cx="70" cy="50" r="4" fill="#38bdf8"/></svg>`);
-        const svgHost = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><rect x="30" y="20" width="40" height="60" rx="3" fill="#1e293b" stroke="#f472b6" stroke-width="3"/><circle cx="40" cy="65" r="3" fill="#f472b6"/></svg>`);
+        // High quality modern SVG icons
+        // Switch: layered server rack style
+        const svgSwitch = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(`
+            <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+                <rect x="15" y="25" width="70" height="50" rx="8" fill="#0b101e" stroke="#38bdf8" stroke-width="5"/>
+                <line x1="15" y1="41" x2="85" y2="41" stroke="#38bdf8" stroke-width="3"/>
+                <line x1="15" y1="58" x2="85" y2="58" stroke="#38bdf8" stroke-width="3"/>
+                <circle cx="28" cy="33" r="3" fill="#38bdf8"/><circle cx="40" cy="33" r="3" fill="#38bdf8"/><circle cx="52" cy="33" r="3" fill="#38bdf8"/>
+                <circle cx="28" cy="50" r="3" fill="#38bdf8"/><circle cx="40" cy="50" r="3" fill="#38bdf8"/><circle cx="52" cy="50" r="3" fill="#38bdf8"/>
+                <circle cx="28" cy="67" r="3" fill="#38bdf8"/><circle cx="40" cy="67" r="3" fill="#38bdf8"/><circle cx="52" cy="67" r="3" fill="#38bdf8"/>
+                <circle cx="72" cy="50" r="5" fill="#22c55e"/>
+            </svg>
+        `);
+        // Host: modern laptop/desktop style
+        const svgHost = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(`
+            <svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100">
+                <rect x="25" y="25" width="50" height="35" rx="4" fill="#0b101e" stroke="#f472b6" stroke-width="5"/>
+                <polygon points="15,65 85,65 75,70 25,70" fill="#0b101e" stroke="#f472b6" stroke-width="5" stroke-linejoin="round"/>
+                <rect x="42" y="60" width="16" height="5" fill="#f472b6"/>
+                <circle cx="50" cy="42" r="6" fill="#f472b6" opacity="0.3"/>
+            </svg>
+        `);
 
         var nodes = new vis.DataSet();
         var edges = new vis.DataSet();
@@ -411,22 +550,43 @@
         var options = {
             nodes: {
                 shape: 'image',
-                size: 30,
-                font: { size: 12, color: '#f8fafc', face: 'Inter', background: 'rgba(15,23,42,0.7)' },
-                chosen: false
+                size: 35, // slightly larger
+                font: { 
+                    size: 14, 
+                    color: '#ffffff', 
+                    face: 'Inter',
+                    bold: { color: '#ffffff', size: 14, vadjust: 0, mod: 'bold' },
+                    strokeWidth: 4,     // Solid outline for readability
+                    strokeColor: '#0b101e' // Dark background color to create sharp contrast
+                },
+                chosen: {
+                    node: function(values, id, selected, hovering) {
+                        values.size = 40;
+                        values.shadow = true;
+                        values.shadowColor = '#eab308';
+                        values.shadowSize = 20;
+                    }
+                }
             },
             edges: {
                 width: 3,
                 smooth: { type: 'dynamic' },
-                chosen: false
+                chosen: {
+                    edge: function(values, id, selected, hovering) {
+                        values.width = 5;
+                        values.shadow = true;
+                        values.shadowColor = '#eab308';
+                        values.shadowSize = 15;
+                    }
+                }
             },
             physics: {
                 solver: 'repulsion',
                 repulsion: {
-                    centralGravity: 0.1,
-                    springLength: 150,
+                    centralGravity: 0.05,
+                    springLength: 100,
                     springConstant: 0.05,
-                    nodeDistance: 180,
+                    nodeDistance: 120,
                     damping: 0.09
                 },
                 stabilization: {
@@ -438,17 +598,16 @@
                 hover: false,
                 dragView: true,
                 zoomView: true,
-                zoomSpeed: 0.8
+                zoomSpeed: 0.3
             }
         };
         var network = new vis.Network(container, data, options);
         let latestData = null;
         let initialFitDone = false;
 
-        // Constrain Zoom
         network.on("zoom", function (params) {
-            const minScale = 0.4;
-            const maxScale = 2.5;
+            const minScale = 0.5;
+            const maxScale = 3.0;
             if (params.scale < minScale) {
                 network.moveTo({ scale: minScale });
             } else if (params.scale > maxScale) {
@@ -456,48 +615,37 @@
             }
         });
 
-        // Network Control Buttons
         document.getElementById('btn-zoom-in').addEventListener('click', () => {
             const currentScale = network.getScale();
-            network.moveTo({ scale: Math.min(2.5, currentScale * 1.5), animation: { duration: 300, easingFunction: 'easeInOutQuad' } });
+            network.moveTo({ scale: Math.min(3.0, currentScale * 1.3), animation: { duration: 300, easingFunction: 'easeInOutQuad' } });
         });
         document.getElementById('btn-zoom-out').addEventListener('click', () => {
             const currentScale = network.getScale();
-            network.moveTo({ scale: Math.max(0.4, currentScale / 1.5), animation: { duration: 300, easingFunction: 'easeInOutQuad' } });
+            network.moveTo({ scale: Math.max(0.5, currentScale / 1.3), animation: { duration: 300, easingFunction: 'easeInOutQuad' } });
         });
         document.getElementById('btn-fit').addEventListener('click', () => {
-            network.fit({ animation: false });
-            let currentScale = network.getScale();
-            network.moveTo({ scale: currentScale * 0.85, animation: { duration: 500, easingFunction: "easeInOutQuad" } });
+            network.fit({ animation: { duration: 500, easingFunction: "easeInOutQuad" } });
         });
 
-        // Auto-fit network when layout stabilizes
         network.on("stabilizationIterationsDone", function () {
             if (!initialFitDone) {
-                // Delay fit slightly to ensure final node coordinates are fully rendered
                 setTimeout(() => {
-                    network.fit({ animation: false });
-                    let currentScale = network.getScale();
-                    network.moveTo({ scale: currentScale * 0.85, animation: { duration: 800, easingFunction: "easeInOutQuad" } });
+                    network.fit({ animation: { duration: 800, easingFunction: "easeInOutQuad" } });
                 }, 100);
                 initialFitDone = true;
             }
         });
 
         network.on("click", function (params) {
+            const detailsPanel = document.getElementById("panel-details");
             const detailsContent = document.getElementById("details-content");
             if (!latestData) return;
 
-            // Reset all nodes and edges shadows
-            let resetNodes = nodes.get().map(n => ({ id: n.id, shadow: { enabled: false } }));
-            let resetEdges = edges.get().map(e => ({ id: e.id, shadow: { enabled: false } }));
-            if (resetNodes.length > 0) nodes.update(resetNodes);
-            if (resetEdges.length > 0) edges.update(resetEdges);
-
             if (params.nodes.length > 0) {
+                // Auto-expand details panel on click
+                detailsPanel.classList.remove('collapsed');
+                
                 const nodeId = params.nodes[0];
-                nodes.update({ id: nodeId, shadow: { enabled: true, color: '#eab308', size: 25, x: 0, y: 0 } });
-
                 if (nodeId.startsWith('s')) {
                     const dpid = nodeId.substring(1);
                     const sw = latestData.topology.switches[dpid];
@@ -509,21 +657,18 @@
                         }
                     }
                     detailsContent.innerHTML = `<p><strong>Type:</strong> Switch</p><p><strong>DPID:</strong> ${dpid}</p><p><strong>Ports:</strong> ${ports}</p>
-                        <hr style="border:0; border-bottom:1px solid var(--glass-border); margin: 10px 0;"><p><strong>Traffic Activity:</strong></p>
-                        <ul style="padding-left: 20px; font-size: 0.8rem; color: var(--text-muted);">${trafficHTML || '<li>None</li>'}</ul>`;
+                        <hr style="border:0; border-bottom:1px solid var(--glass-border); margin: 15px 0;"><p><strong>Traffic Activity:</strong></p>
+                        <ul style="padding-left: 20px; font-size: 0.85rem; color: var(--text-muted); margin-top:5px;">${trafficHTML || '<li>None</li>'}</ul>`;
                 } else if (nodeId.startsWith('h')) {
                     const mac = nodeId.substring(1);
                     const host = latestData.topology.hosts[mac];
                     detailsContent.innerHTML = `<p><strong>Type:</strong> Host</p><p><strong>MAC:</strong> ${host.mac}</p><p><strong>IPv4:</strong> ${host.ipv4 || "Unknown"}</p><p><strong>Switch:</strong> s${host.dpid} (Port ${host.port})</p>`;
                 }
             } else if (params.edges.length > 0) {
+                detailsPanel.classList.remove('collapsed');
                 const edgeId = params.edges[0];
-                edges.update({ id: edgeId, shadow: { enabled: true, color: '#eab308', size: 15, x: 0, y: 0 } });
-
                 const edge = edges.get(edgeId);
                 detailsContent.innerHTML = `<p><strong>Type:</strong> Link</p><p><strong>From:</strong> ${edge.from}</p><p><strong>To:</strong> ${edge.to}</p><p><strong>Throughput:</strong> ${edge.label || '0 Mbps'}</p>`;
-            } else {
-                detailsContent.innerHTML = '<p style="color: var(--text-muted); font-style: italic;">Click a node/edge!</p>';
             }
         });
 
@@ -536,7 +681,15 @@
                 let newNodes = [], newEdges = [], topo = msg.topology, traffic = msg.traffic;
                 let switchCount = 0, hostCount = 0, totalTraffic = 0.0;
 
-                for (let dpid in topo.switches) { switchCount++; newNodes.push({ id: 's' + dpid, label: 's' + dpid, image: svgSwitch }); }
+                for (let dpid in topo.switches) { 
+                    switchCount++; 
+                    newNodes.push({ 
+                        id: 's' + dpid, 
+                        label: '<b>s' + dpid + '</b>', 
+                        image: svgSwitch,
+                        font: { multi: 'html' } 
+                    }); 
+                }
 
                 for (let mac in topo.hosts) {
                     let host = topo.hosts[mac];
@@ -546,7 +699,12 @@
 
                     hostCount++;
                     let ip = host.ipv4 && host.ipv4 !== "None" ? host.ipv4 : '10.0.0.' + parseInt(mac.substring(15), 16);
-                    newNodes.push({ id: 'h' + mac, label: ip, image: svgHost });
+                    newNodes.push({ 
+                        id: 'h' + mac, 
+                        label: '<b>' + ip + '</b>', 
+                        image: svgHost,
+                        font: { multi: 'html' }
+                    });
 
                     let rx = 0;
                     if (traffic && traffic[host.dpid] && traffic[host.dpid][host.port]) {
@@ -564,7 +722,7 @@
                     let labelText = rx.toFixed(1) + ' Mbps';
                     if (rx > 0) labelText += ' (' + percentage.toFixed(0) + '%)';
                     
-                    newEdges.push({ id: 'e_h' + mac, from: 'h' + mac, to: 's' + host.dpid, color: { color: ec, hover: ec, highlight: '#eab308' }, width: w, label: labelText, font: { align: 'horizontal', color: ec, strokeWidth: 2, size: 10, face: 'Inter' } });
+                    newEdges.push({ id: 'e_h' + mac, from: 'h' + mac, to: 's' + host.dpid, color: { color: ec, hover: ec, highlight: '#eab308' }, width: w, label: labelText, font: { align: 'horizontal', color: ec, strokeWidth: 3, strokeColor: '#0b101e', size: 11, face: 'Inter', multi: 'html' } });
                 }
 
                 let linkMap = {};
@@ -590,10 +748,9 @@
                     let labelText = l.rx.toFixed(1) + ' Mbps';
                     if (l.rx > 0) labelText += ' (' + percentage.toFixed(0) + '%)';
                     
-                    newEdges.push({ id: edgeId, from: l.from, to: l.to, color: { color: ec, hover: ec, highlight: '#eab308' }, width: w, label: labelText, font: { align: 'horizontal', color: ec, strokeWidth: 2, size: 10, face: 'Inter' } });
+                    newEdges.push({ id: edgeId, from: l.from, to: l.to, color: { color: ec, hover: ec, highlight: '#eab308' }, width: w, label: labelText, font: { align: 'horizontal', color: ec, strokeWidth: 3, strokeColor: '#0b101e', size: 11, face: 'Inter', multi: 'html' } });
                 });
 
-                // Diff-based updates: only add/remove/update changed items
                 let existingNodeIds = new Set(nodes.getIds());
                 let newNodeIds = new Set(newNodes.map(n => n.id));
 
@@ -636,7 +793,7 @@
                     }
                 }
                 if (!hasFlows) {
-                    tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--text-muted);">No active flows</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="3" style="text-align: center; color: var(--text-muted); padding: 20px;">No active flows</td></tr>';
                 } else {
                     tbody.replaceChildren(fragment);
                 }
@@ -648,16 +805,17 @@
         socket.on('event_logs', function (logs) {
             const logsContainer = document.getElementById("log-entries");
             logs.forEach(log => {
-                const colorClass = log.action === 'add' ? 'log-add' : 'log-remove';
+                const actionClass = log.action === 'add' ? 'add' : 'remove';
+                const textClass = log.action === 'add' ? 'log-add' : 'log-remove';
                 const entry = document.createElement('div');
-                entry.className = 'log-entry';
+                entry.className = `log-entry ${actionClass}`;
 
                 const timeSpan = document.createElement('span');
                 timeSpan.className = 'log-time';
-                timeSpan.textContent = `[${log.timestamp}] `;
+                timeSpan.textContent = `[${log.timestamp}]`;
 
                 const msgSpan = document.createElement('span');
-                msgSpan.className = colorClass;
+                msgSpan.className = textClass;
                 msgSpan.textContent = log.message;
 
                 entry.appendChild(timeSpan);
