@@ -1,3 +1,12 @@
+"""
+ryu_app.py
+
+This module is the core Ryu SDN application.
+It implements the OpenFlow 1.3 switch hub, dynamically learning MAC-to-IP-to-Port
+mappings, installing dynamic forwarding rules, and polling switches for real-time
+port and flow byte statistics to compute network utilization metrics.
+"""
+
 from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.lib import hub
@@ -7,17 +16,21 @@ from ryu.ofproto import ofproto_v1_3
 from ryu.lib.packet import packet, ethernet, ether_types, arp, ipv4 as ipv4_pkt
 from ryu.topology import event
 from ryu.topology.api import get_switch, get_link, get_host
-from ryu.app.wsgi import ControllerBase, WSGIApplication, route
-from webob import Response
-import json
+from ryu.app.wsgi import WSGIApplication
+
 import time
+import sys
 import os
 import logging
+
+# Ensure local imports work regardless of how ryu-manager is invoked
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from api import NetworkAPI, api_instance_name
+
 logging.getLogger('eventlet.wsgi.server').setLevel(logging.WARNING)
 
-api_instance_name = 'api_app'
-
 class NetworkController(app_manager.RyuApp):
+    """Core SDN application managing OpenFlow rules and state discovery."""
     OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
     _CONTEXTS = {'wsgi': WSGIApplication}
     
@@ -59,7 +72,8 @@ class NetworkController(app_manager.RyuApp):
         self.monitor_thread = hub.spawn(self._monitor)
     
     @set_ev_cls(ofp_event.EventOFPStateChange, [MAIN_DISPATCHER, DEAD_DISPATCHER])
-    def state_change_handler(self, ev): # Handle datapath state changes
+    def state_change_handler(self, ev):
+        """Tracks the connection state of the switches."""
         datapath = ev.datapath
         
         if ev.state == MAIN_DISPATCHER: # Negotiation between RYU and OF Switch must be completed
@@ -71,10 +85,10 @@ class NetworkController(app_manager.RyuApp):
                 self.logger.warning("Switch datapath id %s DISCONNECTED", datapath.id)
                 del self.datapaths[datapath.id]
     
-    # Code source: https://osrg.github.io/ryu-book/en/html/switching_hub.html
-    @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER) # Waiting to receive SwitchFeatures message
-    def switch_features_handler(self, ev): # Handle OF switch connection
-        try: # RYU gets this reply from a previously sent request to the switch
+    @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
+    def switch_features_handler(self, ev):
+        """Installs the default table-miss flow entry when a switch connects."""
+        try:
             datapath = ev.msg.datapath 
             ofproto = datapath.ofproto
             parser = datapath.ofproto_parser
@@ -105,7 +119,8 @@ class NetworkController(app_manager.RyuApp):
             self.logger.error("Error in switch_features_handler: %s", e)
             self.logger.exception(e)
     
-    def add_flow(self, datapath, priority, match, actions, buffer_id=None): # Add a flow entry to the switch
+    def add_flow(self, datapath, priority, match, actions, buffer_id=None):
+        """Pushes a new flow rule to a switch datapath."""
         try:
             ofproto = datapath.ofproto
             parser = datapath.ofproto_parser
@@ -130,7 +145,8 @@ class NetworkController(app_manager.RyuApp):
             self.logger.error("Error adding flow: %s", e)
     
     @set_ev_cls(ofp_event.EventOFPPacketIn, MAIN_DISPATCHER)
-    def packet_in_handler(self, ev): # Handle packet-in messages
+    def packet_in_handler(self, ev):
+        """Learns host MACs, IPs, and ports dynamically from incoming packets."""
         try:
             msg = ev.msg
             datapath = msg.datapath
@@ -203,7 +219,8 @@ class NetworkController(app_manager.RyuApp):
             self.logger.error("Error in packet_in_handler: %s", e)
     
     @set_ev_cls(event.EventSwitchEnter)
-    def switch_enter_handler(self, ev): # Handle switch addition
+    def switch_enter_handler(self, ev):
+        """Triggers topology update when a switch connects."""
         try:
             switch = ev.switch
             self.logger.info("Topology: Switch %s ENTERED", switch.dp.id)
@@ -212,6 +229,7 @@ class NetworkController(app_manager.RyuApp):
             self.logger.error("Error in switch_enter_handler: %s", e)
     
     def _schedule_topology_update(self):
+        """Schedules a debounced update to prevent hammering the API."""
         if self._topo_update_scheduled:
             return
         self._topo_update_scheduled = True
@@ -221,7 +239,8 @@ class NetworkController(app_manager.RyuApp):
         self._topo_update_scheduled = False
         self.update_topology()
 
-    def _monitor(self): # Request port stats and refresh host IPs periodically
+    def _monitor(self):
+        """Background thread to poll port and flow stats."""
         while True:
             # Optionally clear inactive flows
             self.flow_matrix.clear()
@@ -246,6 +265,7 @@ class NetworkController(app_manager.RyuApp):
             hub.sleep(5) # polling interval
             
     def _request_stats(self, datapath):
+        """Requests switch port and flow statistics."""
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
         req = parser.OFPPortStatsRequest(datapath, 0, ofproto.OFPP_ANY)
@@ -254,14 +274,16 @@ class NetworkController(app_manager.RyuApp):
         flow_req = parser.OFPFlowStatsRequest(datapath)
         datapath.send_msg(flow_req)
 
-    def _refresh_host_ips(self): # Supplement missing host IPs from learned mac_to_ip mapping
+    def _refresh_host_ips(self):
+        """Supplements missing host IPs from learned mac_to_ip mappings."""
         hosts = self.topology.get('hosts', {})
         for mac, host_info in hosts.items():
             if host_info.get('ipv4') is None and mac in self.mac_to_ip:
                 host_info['ipv4'] = self.mac_to_ip[mac]
 
     @set_ev_cls(ofp_event.EventOFPPortStatsReply, MAIN_DISPATCHER)
-    def _port_stats_reply_handler(self, ev): # Handle port stats replies
+    def _port_stats_reply_handler(self, ev):
+        """Processes port stats to calculate real-time Tx/Rx Mbps."""
         body = ev.msg.body
         dpid = ev.msg.datapath.id
         
@@ -301,6 +323,7 @@ class NetworkController(app_manager.RyuApp):
 
     @set_ev_cls(ofp_event.EventOFPFlowStatsReply, MAIN_DISPATCHER)
     def _flow_stats_reply_handler(self, ev):
+        """Processes flow stats to calculate source-to-destination bandwidth metrics."""
         body = ev.msg.body
         dpid = ev.msg.datapath.id
         
@@ -335,7 +358,8 @@ class NetworkController(app_manager.RyuApp):
                 }
 
     @set_ev_cls(event.EventSwitchLeave)
-    def switch_leave_handler(self, ev): # Handle switch removal
+    def switch_leave_handler(self, ev):
+        """Cleans up internal states when a switch disconnects."""
         try:
             switch = ev.switch
             dpid = switch.dp.id
@@ -349,7 +373,8 @@ class NetworkController(app_manager.RyuApp):
             self.logger.error("Error in switch_leave_handler: %s", e)
     
     @set_ev_cls(event.EventLinkAdd)
-    def link_add_handler(self, ev): # Handle link addition
+    def link_add_handler(self, ev):
+        """Triggers topology update when a link is added."""
         try:
             link = ev.link
             self.logger.info("Topology: Link ADDED s%s:%s -> s%s:%s", link.src.dpid, link.src.port_no, link.dst.dpid, link.dst.port_no)
@@ -358,7 +383,8 @@ class NetworkController(app_manager.RyuApp):
             self.logger.error("Error in link_add_handler: %s", e)
     
     @set_ev_cls(event.EventLinkDelete)
-    def link_delete_handler(self, ev): # Handle link deletion
+    def link_delete_handler(self, ev):
+        """Triggers topology update when a link drops."""
         try:
             link = ev.link
             self.logger.warning("Topology: Link DELETED s%s:%s -> s%s:%s", link.src.dpid, link.src.port_no, link.dst.dpid, link.dst.port_no)
@@ -367,7 +393,8 @@ class NetworkController(app_manager.RyuApp):
             self.logger.error("Error in link_delete_handler: %s", e)
     
     @set_ev_cls(event.EventHostAdd)
-    def host_add_handler(self, ev): # Handle host addition
+    def host_add_handler(self, ev):
+        """Triggers topology update when a host joins."""
         try:
             host = ev.host
             self.logger.info("Topology: Host ADDED %s at s%s:%s", host.mac, host.port.dpid, host.port.port_no)
@@ -375,7 +402,8 @@ class NetworkController(app_manager.RyuApp):
         except Exception as e:
             self.logger.error("Error in host_add_handler: %s", e)
     
-    def update_topology(self): # Update topology information
+    def update_topology(self):
+        """Compiles the full topology state and increments version if structure changes."""
         try:
             switch_list = get_switch(self, None)
             switches = {}
@@ -435,101 +463,3 @@ class NetworkController(app_manager.RyuApp):
         except Exception as e:
             self.logger.error("Error updating topology: %s", e)
             self.logger.exception(e)
-            
-
-class NetworkAPI(ControllerBase): # REST API for topology exposure
-    def __init__(self, req, link, data, **config):
-        super(NetworkAPI, self).__init__(req, link, data, **config)
-        self.controller = data[api_instance_name]
-        self.secret_token = os.environ.get('SDN_TWIN_AUTH_TOKEN', 'Bearer SDN-Twin-Secret-Token-2026')
-
-    def _check_auth(self, req):
-        if req.headers.get('Authorization') != self.secret_token:
-            return Response(status=401, body='{"error": "Unauthorized"}', content_type='application/json')
-        return None
-    
-    @route('topology', '/api/topology', methods=['GET'])
-    def get_topology(self, req, **kwargs):
-        auth_resp = self._check_auth(req)
-        if auth_resp: return auth_resp
-        
-        version = str(self.controller.topology['version'])
-        if req.headers.get('If-None-Match') == version:
-            return Response(status=304)
-
-        body = json.dumps(self.controller.topology, separators=(',', ':'))
-        resp = Response(
-            content_type='application/json',
-            body=body.encode('utf-8')
-        )
-        resp.headers['ETag'] = version
-        return resp
-    
-    @route('switches', '/api/switches', methods=['GET'])
-    def get_switches(self, req, **kwargs):
-        auth_resp = self._check_auth(req)
-        if auth_resp: return auth_resp
-        
-        body = json.dumps(self.controller.topology['switches'], separators=(',', ':'))
-        return Response(
-            content_type='application/json',
-            body=body.encode('utf-8')
-        )
-    
-    @route('links', '/api/links', methods=['GET'])
-    def get_links(self, req, **kwargs):
-        auth_resp = self._check_auth(req)
-        if auth_resp: return auth_resp
-        
-        body = json.dumps(self.controller.topology['links'], separators=(',', ':'))
-        return Response(
-            content_type='application/json',
-            body=body.encode('utf-8')
-        )
-    
-    @route('hosts', '/api/hosts', methods=['GET'])
-    def get_hosts(self, req, **kwargs):
-        auth_resp = self._check_auth(req)
-        if auth_resp: return auth_resp
-        
-        body = json.dumps(self.controller.topology['hosts'], separators=(',', ':'))
-        return Response(
-            content_type='application/json',
-            body=body.encode('utf-8')
-        )
-
-    @route('version', '/api/version', methods=['GET'])
-    def get_version(self, req, **kwargs):
-        auth_resp = self._check_auth(req)
-        if auth_resp: return auth_resp
-        
-        version_info = {
-            'version': self.controller.topology['version']
-        }
-        body = json.dumps(version_info, separators=(',', ':'))
-        return Response(
-            content_type='application/json',
-            body=body.encode('utf-8')
-        )
-
-    @route('traffic', '/api/traffic', methods=['GET'])
-    def get_traffic(self, req, **kwargs):
-        auth_resp = self._check_auth(req)
-        if auth_resp: return auth_resp
-        
-        body = json.dumps(self.controller.traffic, separators=(',', ':'))
-        return Response(
-            content_type='application/json',
-            body=body.encode('utf-8')
-        )
-        
-    @route('flows', '/api/flows', methods=['GET'])
-    def get_flows(self, req, **kwargs):
-        auth_resp = self._check_auth(req)
-        if auth_resp: return auth_resp
-        
-        body = json.dumps(self.controller.flow_matrix, separators=(',', ':'))
-        return Response(
-            content_type='application/json',
-            body=body.encode('utf-8')
-        )

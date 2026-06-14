@@ -627,10 +627,12 @@
                 let hasFlows = false;
                 for (let src in msg.flows) {
                     for (let dst in msg.flows[src]) {
-                        hasFlows = true;
-                        const tr = document.createElement('tr');
-                        tr.innerHTML = `<td>${src}</td><td>${dst}</td><td>${msg.flows[src][dst].toFixed(2)}</td>`;
-                        fragment.appendChild(tr);
+                        if (msg.flows[src][dst] > 0) {
+                            hasFlows = true;
+                            const tr = document.createElement('tr');
+                            tr.innerHTML = `<td>${src}</td><td>${dst}</td><td>${msg.flows[src][dst].toFixed(2)}</td>`;
+                            fragment.appendChild(tr);
+                        }
                     }
                 }
                 if (!hasFlows) {

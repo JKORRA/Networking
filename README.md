@@ -90,37 +90,50 @@ The system exploits the **Ryu Northbound REST API** to retrieve topology and tra
 
 ```
 .
-├── net.py               # Physical network topology (Mininet)
-├── controller.py        # Ryu SDN controller with REST API + traffic stats
-├── twin.py              # Digital Twin builder with sync and traffic emulation
-├── dashboard.py         # Flask web server for the visualization dashboard
-├── Dockerfile.ryu       # Docker image for running Ryu on modern systems
-├── start.sh             # Launcher script (Tmux + Docker orchestration)
-
-├── templates/
-│   └── index.html       # vis-network frontend with traffic heatmaps
-└── README.md            # This file
+├── src/
+│   ├── network/
+│   │   └── net.py             # Physical network topology (Mininet)
+│   ├── controller/
+│   │   ├── api.py             # WSGI REST API endpoints
+│   │   └── ryu_app.py         # Core OpenFlow Ryu SDN controller
+│   ├── twin/
+│   │   ├── api_client.py      # REST API communication client
+│   │   ├── engine.py          # Twin orchestration engine
+│   │   ├── main.py            # Digital Twin launcher
+│   │   └── topology.py        # Mininet topology generation
+│   └── dashboard/
+│       ├── app.py             # Flask web server for dashboard
+│       ├── poller.py          # Background Ryu API polling thread
+│       ├── utils.py           # Topology diffing and event logic
+│       ├── static/            # Static web assets
+│       └── templates/         # HTML templates
+├── Dockerfile.ryu             # Docker image for running Ryu on modern systems
+├── start.sh                   # Launcher script (Tmux + Docker orchestration)
+└── README.md                  # This file
 ```
 
 ### File Descriptions
 
-- **`net.py`** — Defines the physical SDN network: 3 switches in a linear topology (`s1-s2-s3`), each with one host (`h1`, `h2`, `h3`). Connects to a remote Ryu controller on port `6633`.
+- **`src/network/net.py`** — Defines the physical SDN network: 3 switches in a linear topology (`s1-s2-s3`), each with one host (`h1`, `h2`, `h3`). Connects to a remote Ryu controller on port `6633`.
 
-- **`controller.py`** — A Ryu OpenFlow 1.3 controller implementing:
+- **`src/controller/ryu_app.py` & `api.py`** — A modular Ryu OpenFlow 1.3 controller implementing:
   - L2 learning switch with ARP flood handling
   - Topology discovery via `ryu.topology` events
   - Real-time port statistics polling (`OFPPortStatsRequest`)
-  - REST API endpoints: `/api/topology`, `/api/switches`, `/api/links`, `/api/hosts`, `/api/traffic`, `/api/version`
+  - REST API endpoints via `api.py`: `/api/topology`, `/api/switches`, `/api/links`, `/api/hosts`, `/api/traffic`, `/api/version`
 
-- **`twin.py`** — The main Digital Twin engine:
-  - Fetches the physical topology via REST API
-  - Builds an isolated Mininet replica with 100% identical IPs, MACs, and port mappings
-  - Runs a background synchronization loop dynamically cloning physical OpenFlow tables into the twin kernel (`ovs-ofctl`)
-  - Spawns `iperf3` inside twin hosts to emulate detected traffic loads
+- **`src/twin/` Modules** — The main Digital Twin engine:
+  - `api_client.py` fetches the physical topology via REST API
+  - `topology.py` builds an isolated Mininet replica with 100% identical IPs, MACs, and port mappings
+  - `engine.py` runs a background synchronization loop dynamically cloning physical OpenFlow tables into the twin kernel (`ovs-ofctl`)
+  - `main.py` serves as the CLI launcher
 
-- **`dashboard.py`** — A Flask application that proxies data from Ryu and serves the web dashboard.
+- **`src/dashboard/` Modules** — The Flask application components:
+  - `poller.py` manages background threads fetching Ryu data via API and streaming over WebSocket.
+  - `utils.py` compares topological states for live event alerts.
+  - `app.py` serves the web dashboard endpoints.
 
-- **`templates/index.html`** — Interactive graph visualization using [vis-network](https://visjs.github.io/vis-network/docs/network/). Edges are color-coded based on traffic:
+- **`src/dashboard/templates/index.html`** — Interactive graph visualization using [vis-network](https://visjs.github.io/vis-network/docs/network/). Edges are color-coded based on traffic:
   - 🟢 Green: < 40% Link Utilization
   - 🟡 Yellow: 40% - 80% Link Utilization
   - 🔴 Red: > 80% Link Utilization
@@ -221,7 +234,7 @@ If you prefer to run things manually, open **5 separate terminal windows/tabs** 
 ### Step 1 — Start the Physical Network
 
 ```bash
-sudo python3 net.py
+sudo python3 src/network/net.py
 ```
 
 Wait for the `mininet>` prompt to appear. This means the 3 switches and 3 hosts are running.
@@ -229,7 +242,7 @@ Wait for the `mininet>` prompt to appear. This means the 3 switches and 3 hosts 
 ### Step 2 — Start the Physical Ryu Controller
 
 ```bash
-sudo docker run -it --network host -v $(pwd):/app -w /app my-ryu ryu-manager --observe-links controller.py
+sudo docker run -it --network host -v $(pwd):/app -w /app my-ryu ryu-manager --observe-links src/controller/ryu_app.py
 ```
 
 You should see log messages like:
@@ -242,7 +255,7 @@ Switch datapath id 3 CONNECTED
 ### Step 3 — Start the Digital Twin
 
 ```bash
-sudo python3 twin.py --sync
+sudo python3 src/twin/main.py --sync
 ```
 
 The `--sync` flag enables continuous background synchronization (topology discovery, dynamic link stitching, and control-plane mirroring).
@@ -259,9 +272,9 @@ Started topology synchronization (interval: 10s)
 ### Step 4 — Start the Web Dashboard
 
 ```bash
-python3 dashboard.py
+cd src/dashboard && python3 app.py
 # Or, if using a virtual environment:
-./venv/bin/python3 dashboard.py
+cd src/dashboard && ../../venv/bin/python3 app.py
 ```
 
 If you use `start.sh`, the dashboard will automatically open in your browser when ready. Otherwise, open your browser and navigate to: **http://localhost:5000**

@@ -91,7 +91,7 @@ cleanup() {
     done
     
     pkill -f "ryu-manager" 2>/dev/null || true
-    pkill -f "dashboard.py" 2>/dev/null || true
+    pkill -f "app.py" 2>/dev/null || true
     pkill -f "iperf" 2>/dev/null || true
     pkill -f "iperf3" 2>/dev/null || true
     print_ok "Cleanup complete"
@@ -203,7 +203,7 @@ tmux new-session -d -s $SESSION -n "SDN-Twin" -c "$PROJECT_DIR"
 tmux set-option -t $SESSION pane-border-status top
 PANE_PHYS_CTRL=$(tmux display-message -p -t $SESSION -F "#{pane_id}")
 tmux select-pane -t $PANE_PHYS_CTRL -T "Physical Ryu Controller"
-tmux send-keys -t $PANE_PHYS_CTRL "echo '=== PHYSICAL RYU CONTROLLER ===' && docker run --rm --network host -v \"$PROJECT_DIR\":/app -w /app -e SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" ${DOCKER_IMAGE} ryu-manager --observe-links controller.py" C-m
+tmux send-keys -t $PANE_PHYS_CTRL "echo '=== PHYSICAL RYU CONTROLLER ===' && docker run --rm --network host -v \"$PROJECT_DIR\":/app -w /app -e SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" ${DOCKER_IMAGE} ryu-manager --observe-links src/controller/ryu_app.py" C-m
 
 wait_for_http "http://localhost:${PHYSICAL_API_PORT}/api/version" "Physical Ryu" || true
 
@@ -211,7 +211,7 @@ wait_for_http "http://localhost:${PHYSICAL_API_PORT}/api/version" "Physical Ryu"
 tmux split-window -h -t $PANE_PHYS_CTRL -c "$PROJECT_DIR"
 PANE_PHYS_NET=$(tmux display-message -p -t $SESSION -F "#{pane_id}")
 tmux select-pane -t $PANE_PHYS_NET -T "Physical Network (Mininet)"
-tmux send-keys -t $PANE_PHYS_NET "echo '=== PHYSICAL NETWORK ===' && python3 net.py" C-m
+tmux send-keys -t $PANE_PHYS_NET "echo '=== PHYSICAL NETWORK ===' && python3 src/network/net.py" C-m
 
 # Wait for physical network to be discovered (topology version >= 1)
 print_step "Waiting for physical network topology..."
@@ -233,7 +233,7 @@ fi
 tmux split-window -v -t $PANE_PHYS_NET -c "$PROJECT_DIR"
 PANE_TWIN_NET=$(tmux display-message -p -t $SESSION -F "#{pane_id}")
 tmux select-pane -t $PANE_TWIN_NET -T "Digital Twin (Mininet)"
-tmux send-keys -t $PANE_TWIN_NET "echo '=== DIGITAL TWIN ===' && SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" python3 twin.py --sync" C-m
+tmux send-keys -t $PANE_TWIN_NET "echo '=== DIGITAL TWIN ===' && SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" python3 src/twin/main.py --sync" C-m
 
 # Wait for physical network to have hosts discovered
 print_step "Waiting for hosts to be discovered..."
@@ -248,7 +248,7 @@ done
 
 # 4. Dashboard
 tmux new-window -t $SESSION -n "Dashboard" -c "$PROJECT_DIR"
-tmux send-keys -t $SESSION:Dashboard "echo '=== WEB DASHBOARD ===' && SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" \"$DASHBOARD_PYTHON\" dashboard.py" C-m
+tmux send-keys -t $SESSION:Dashboard "echo '=== WEB DASHBOARD ===' && SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" cd src/dashboard && \"$DASHBOARD_PYTHON\" app.py" C-m
 wait_for_port $DASHBOARD_PORT "Dashboard" || true
 
 if command -v xdg-open > /dev/null; then
@@ -284,7 +284,7 @@ echo -e "    │  Physical Ctrl   │  Twin Ctrl       │"
 echo -e "    │  (Ryu Docker)    │  (Ryu Docker)    │"
 echo -e "    ├──────────────────┼──────────────────┤"
 echo -e "    │  Physical Net    │  Digital Twin    │"
-echo -e "    │  (net.py)        │  (twin.py)       │"
+echo -e "    │  (src/.../net.py)│  (src/.../main.py)│"
 echo -e "    └──────────────────┴──────────────────┘"
 echo -e "    Tab 2: Dashboard (Flask)"
 echo ""
