@@ -9,6 +9,10 @@
     <script src="/static/socket.io.min.js"></script>
     <script type="text/javascript" src="/static/vis-network.min.js"></script>
     <style>
+        * {
+            box-sizing: border-box;
+        }
+
         :root {
             --bg-dark: #0b101e;
             --glass-bg: rgba(15, 23, 42, 0.5);
@@ -63,14 +67,14 @@
         /* Floating Panels Container */
         .floating-ui {
             position: absolute;
-            top: 0; left: 0;
-            width: 100%; height: 100%;
+            top: 0; left: 0; width: 100vw; height: 100vh;
             z-index: 10;
             pointer-events: none; /* Let clicks pass through to network */
         }
 
         /* Panel Common Styles */
         .panel {
+            position: absolute;
             pointer-events: auto; /* Enable clicks inside panels */
             background: var(--glass-bg);
             backdrop-filter: blur(20px);
@@ -82,7 +86,13 @@
             display: flex;
             flex-direction: column;
             animation: slideIn 0.5s ease-out backwards;
-            transition: transform 0.3s ease, border-color 0.3s ease, height 0.3s ease;
+            transition: transform 0.3s ease, border-color 0.3s ease;
+            
+            /* Strict bounds to prevent overlapping */
+            max-width: calc(50vw - 35px);
+            max-height: calc(50vh - 35px);
+            min-width: 0;
+            overflow: hidden;
         }
         
         .panel:hover {
@@ -96,6 +106,7 @@
             align-items: center;
             margin-bottom: 15px;
             cursor: pointer;
+            flex-shrink: 0;
         }
         
         .panel-header-wrap h3 {
@@ -105,6 +116,9 @@
             text-transform: uppercase;
             letter-spacing: 1px;
             font-weight: 600;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
         
         .collapse-btn {
@@ -126,10 +140,10 @@
         .panel-content {
             display: flex;
             flex-direction: column;
-            overflow: hidden;
+            overflow-y: auto; /* Allows scrolling if panel hits max-height */
             flex-grow: 1;
             transition: opacity 0.3s ease, max-height 0.3s ease;
-            max-height: 400px;
+            max-height: 800px; /* Arbitrary high value for transition */
             opacity: 1;
         }
 
@@ -154,41 +168,13 @@
             to { opacity: 1; transform: translateY(0); }
         }
 
-        /* Positioning */
-        .panel-header {
-            position: absolute;
-            top: 25px; left: 25px;
-            width: 280px;
-            animation-delay: 0.1s;
-        }
+        /* Specific Panel Positioning and Widths */
+        .panel-header { top: 25px; left: 25px; width: 340px; animation-delay: 0.1s; max-width: calc(50vw - 35px); max-height: calc(100vh - 150px); }
+        .panel-details { top: 25px; right: 25px; width: 300px; animation-delay: 0.2s; max-width: calc(50vw - 35px); max-height: calc(100vh - 150px); }
+        .panel-flows { bottom: 25px; left: 25px; width: 380px; animation-delay: 0.3s; max-width: calc(50vw - 110px); }
+        .panel-logs { bottom: 25px; right: 25px; width: 350px; animation-delay: 0.4s; max-width: calc(50vw - 110px); }
 
-        .panel-details {
-            position: absolute;
-            top: 25px; right: 25px;
-            width: 280px;
-            animation-delay: 0.2s;
-        }
-
-        .panel-flows {
-            position: absolute;
-            bottom: 25px; left: 25px;
-            width: 350px;
-            height: 250px;
-            animation-delay: 0.3s;
-        }
-
-        .panel-logs {
-            position: absolute;
-            bottom: 25px; right: 25px;
-            width: 320px;
-            height: 250px;
-            animation-delay: 0.4s;
-        }
-        
-        .panel-flows.collapsed, .panel-logs.collapsed, .panel-details.collapsed {
-            height: auto;
-        }
-
+        /* Network Controls Bottom Toolbar */
         .network-controls {
             position: absolute;
             bottom: 25px; left: 50%;
@@ -204,6 +190,24 @@
             box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
             animation: slideIn 0.5s ease-out backwards;
             animation-delay: 0.5s;
+            z-index: 20;
+        }
+        .icon-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-main);
+            cursor: pointer;
+            padding: 6px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+        }
+        .icon-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--accent-blue);
+            transform: scale(1.1);
         }
 
         /* Stats Grid */
@@ -239,39 +243,17 @@
             color: var(--text-main);
         }
 
-        /* Buttons */
-        .icon-btn {
-            background: transparent;
-            border: none;
-            color: var(--text-main);
-            width: 36px;
-            height: 36px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            transition: all 0.2s ease;
-        }
-
-        .icon-btn:hover {
-            background: rgba(255, 255, 255, 0.1);
-            color: var(--accent-blue);
-        }
-
-        .icon-btn:active {
-            transform: scale(0.9);
-        }
-
         /* Tables & Scrollbars */
         .custom-table-container, .log-entries {
             overflow-y: auto;
+            overflow-x: auto;
             flex-grow: 1;
             padding-right: 5px;
         }
 
         ::-webkit-scrollbar {
             width: 6px;
+            height: 6px;
         }
         ::-webkit-scrollbar-track {
             background: rgba(0, 0, 0, 0.1);
@@ -295,6 +277,7 @@
             text-align: left;
             padding: 8px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            white-space: nowrap;
         }
 
         .custom-table tr {
@@ -343,7 +326,7 @@
         header {
             display: flex;
             align-items: center;
-            gap: 12px;
+            justify-content: space-between;
             padding-bottom: 15px;
             border-bottom: 1px solid var(--glass-border);
         }
@@ -406,11 +389,13 @@
 
     <div class="floating-ui">
         
-        <!-- Top Left: Overview (Not collapsible) -->
-        <div class="panel panel-header">
+        <!-- Top Left: Overview -->
+        <div class="panel panel-header" id="panel-header">
             <header>
-                <div class="pulse-dot" id="status-dot"></div>
-                <h1>SDN Twin</h1>
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <div class="pulse-dot" id="status-dot"></div>
+                    <h1>SDN Twin</h1>
+                </div>
             </header>
             
             <div class="panel-content" style="margin-top:0;">
@@ -492,7 +477,7 @@
             </div>
         </div>
 
-        <!-- Bottom Center: Controls -->
+        <!-- Restored Bottom Center Controls -->
         <div class="network-controls">
             <button class="icon-btn" id="btn-zoom-in" title="Zoom In">
                 <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -500,8 +485,8 @@
                 </svg>
             </button>
             <button class="icon-btn" id="btn-fit" title="Fit to Screen">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path stroke-linecap="round" stroke-linejoin="round" d="M4 4h6v2H6v4H4V4zm10 0h6v6h-2V6h-4V4zm6 10h2v6h-6v-2h4v-4zM4 14h2v4h4v2H4v-6z" />
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M8 3H5a2 2 0 0 0-2 2v3m18 0V5a2 2 0 0 0-2-2h-3m0 18h3a2 2 0 0 0 2-2v-3M3 16v3a2 2 0 0 0 2 2h3"></path>
                 </svg>
             </button>
             <button class="icon-btn" id="btn-zoom-out" title="Zoom Out">
@@ -598,7 +583,8 @@
                 hover: false,
                 dragView: true,
                 zoomView: true,
-                zoomSpeed: 0.3
+                zoomSpeed: 0.3,
+                selectConnectedEdges: false
             }
         };
         var network = new vis.Network(container, data, options);
@@ -669,6 +655,8 @@
                 const edgeId = params.edges[0];
                 const edge = edges.get(edgeId);
                 detailsContent.innerHTML = `<p><strong>Type:</strong> Link</p><p><strong>From:</strong> ${edge.from}</p><p><strong>To:</strong> ${edge.to}</p><p><strong>Throughput:</strong> ${edge.label || '0 Mbps'}</p>`;
+            } else {
+                detailsPanel.classList.add('collapsed');
             }
         });
 
