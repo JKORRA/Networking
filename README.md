@@ -2,7 +2,7 @@
 
 A fully automated system that generates a real-time **Digital Twin** of an SDN network. The twin replicates the physical topology, mirrors traffic loads, and visualizes everything through an interactive web dashboard with live traffic heatmaps.
 
-![SDN Dashboard](photos/sdn_dashboard.png)
+![SDN Dashboard](assets/sdn_dashboard.png)
 
 The system exploits the **Ryu Northbound REST API** to retrieve topology and traffic information from the physical network, and automatically reproduces any runtime change into the Digital Twin.
 
@@ -218,7 +218,7 @@ The Mininet Python library is installed system-wide by the `mininet` apt package
 
 The easiest way to run the entire project is using the automated `start.sh` script, which orchestrates all 5 components in a single `tmux` session with split panes.
 
-![Tmux Orchestrator](photos/tmux.png)
+![Tmux Orchestrator](assets/tmux.png)
 
 ```bash
 sudo ./start.sh
