@@ -12,8 +12,9 @@ import time
 import heapq
 import threading
 import subprocess
+import socketio
 from mininet.net import Mininet
-from mininet.node import Host
+from mininet.node import Host, RemoteController
 from mininet.cli import CLI
 from mininet.log import info, error, output
 from mininet.link import TCLink
@@ -54,6 +55,9 @@ class DigitalTwin:
             autoStaticArp=True,
             build=False
         )
+        
+        # Connect to the Twin Shadow Controller
+        self.net.addController('c2', controller=RemoteController, ip=CONTROLLER_IP, port=CONTROLLER_PORT)
         
         self.net.build()
         
@@ -154,7 +158,7 @@ class DigitalTwin:
         info('\n')
     
     def start_sync(self):
-        """Starts the background thread to continuously sync topology and flows."""
+        """Starts the WebSocket client to react instantly to topology and flow updates."""
         if not self.enable_sync:
             return
             
@@ -165,48 +169,57 @@ class DigitalTwin:
         self.running = True
         self.sync_thread = threading.Thread(target=self._sync_loop, daemon=True)
         self.sync_thread.start()
-        info(f"Started topology synchronization (interval: {SYNC_INTERVAL}s)\n")
-        info("Twin will replicate: Link changes, New hosts\n")
+        info("Started event-driven topology synchronization (WebSocket)\n")
+        info("Twin will instantly replicate: Link changes, New hosts, Traffic\n")
         info("Sync runs in background - you can still use the CLI!\n\n")
     
     def _sync_loop(self):
-        """Background thread loop: fetches APIs and drives Twin updates."""
+        """Background thread loop: connects to Dashboard via Socket.IO for event-driven updates."""
+        sio = socketio.Client()
         last_version = self.topology_data.get('version', 0)
-        last_etag = str(last_version)
         
-        while self.running:
+        @sio.on('connect')
+        def on_connect():
+            info("Connected to Dashboard WebSocket\n")
+            
+        @sio.on('disconnect')
+        def on_disconnect():
+            info("Disconnected from Dashboard WebSocket\n")
+            
+        @sio.on('update_data')
+        def on_update_data(data):
+            if not self.running:
+                return
+            
             try:
-                # Fetch traffic stats
-                traffic_data = _fetch_json(FLOWS_ENDPOINT, RYU_URL, timeout=5)
-                if traffic_data:
-                    self._handle_traffic(traffic_data)
+                # 1. Emulate Traffic
+                flows = data.get('flows', {})
+                self._handle_traffic(flows)
                 
-                # Sync raw OpenFlow tables for Control-Plane Mirroring
-                self._sync_flow_tables()
-                
-                # Fetch latest topology efficiently using ETag caching
-                topology_data, new_etag = _fetch_json_cached(TOPOLOGY_ENDPOINT, RYU_URL, timeout=5, etag=last_etag)
-                
-                if topology_data == "NOT_MODIFIED" or not topology_data:
-                    continue # ETag matched (no changes) or error
-                
-                new_topology = topology_data
-                last_etag = new_etag
+                # 2. Topology Changes
+                new_topology = data.get('topology', {})
                 new_version = new_topology.get('version', 0)
                 
-                # Check if topology changed
+                nonlocal last_version
                 if new_version > last_version:
-                    output(f"!!!TOPOLOGY CHANGE DETECTED!!! (v{last_version} -> v{new_version})\n")
+                    output(f"\n!!!TOPOLOGY CHANGE DETECTED!!! (v{last_version} -> v{new_version})\n")
                     self._handle_topology_change(self.topology_data, new_topology)
-                    
-                    output("mininet> ")  # Re-print prompt
+                    output("mininet> ")
                     self.topology_data = new_topology
                     last_version = new_version
-
+                    
             except Exception as e:
-                error(f"Sync error: {e}\n")
-            finally:
-                time.sleep(SYNC_INTERVAL)
+                error(f"WebSocket sync error: {e}\n")
+
+        try:
+            # We connect to the dashboard's websocket server
+            sio.connect('http://localhost:5000', wait_timeout=10)
+            while self.running:
+                time.sleep(1) # Keep thread alive
+        except Exception as e:
+            error(f"Failed to connect to Dashboard WebSocket: {e}\n")
+        finally:
+            sio.disconnect()
     
     def _handle_traffic(self, flow_matrix):
         """Spawns iperf3 to emulate detected traffic flow rates."""
@@ -237,46 +250,8 @@ class DigitalTwin:
             result = src_host.cmd(cmd)
             self._track_iperf3_pid(src_host, result)
 
-    def _sync_flow_tables(self):
-        """Mirrors OpenFlow tables from physical switches to twin switches via ovs-ofctl."""
-        try:
-            for switch in self.net.switches:
-                if not switch.name.startswith('twin_s'):
-                    continue
-                
-                physical_switch = switch.name.replace('twin_', '')
-                
-                # Fetch raw OpenFlow table from the physical switch
-                cmd = f"ovs-ofctl dump-flows {physical_switch} -O OpenFlow13 --no-stats"
-                try:
-                    flows = subprocess.check_output(cmd, shell=True, stderr=subprocess.DEVNULL).decode('utf-8')
-                except subprocess.CalledProcessError:
-                    continue # Physical switch might not exist yet
-                
-                # Filter out the header (NXST_FLOW/OFPST_FLOW) and clean lines
-                flow_lines = []
-                for line in flows.splitlines():
-                    line = line.strip()
-                    if line.startswith('NXST_FLOW') or line.startswith('OFPST_FLOW') or not line:
-                        continue
-                    flow_lines.append(line)
-                
-                if not flow_lines:
-                    output(f"No flows found on {physical_switch} to sync to {switch.name}\n")
-                    continue
-                    
-                # Write to temp file and replace
-                tmp_file = f"/tmp/{switch.name}_flows.txt"
-                with open(tmp_file, 'w') as f:
-                    f.write('\n'.join(flow_lines) + '\n')
-                
-                replace_cmd = f"ovs-ofctl replace-flows {switch.name} {tmp_file} -O OpenFlow13"
-                result = subprocess.run(replace_cmd, shell=True, capture_output=True, text=True)
-                if result.returncode != 0:
-                    error(f"Flow replace error on {switch.name}: {result.stderr}\n")
-                
-        except Exception as e:
-            error(f"Flow table sync error: {e}\n")
+    # Note: _sync_flow_tables has been removed because the Shadow Controller 
+    # now handles all flow programming autonomously.
 
     def _track_iperf3_pid(self, host, cmd_output):
         """Tracks the PIDs of spawned iperf3 processes."""
@@ -472,7 +447,7 @@ class DigitalTwin:
             dpid_hex = format(dpid_int, '016x')
             switch_name = f"twin_s{dpid_int}"
             
-            switch = self.net.addSwitch(switch_name, dpid=dpid_hex, failMode='secure')
+            switch = self.net.addSwitch(switch_name, dpid=dpid_hex)
             switch.start(self.net.controllers)
             output(f"Added switch {switch_name} (dpid: {dpid_hex})\n")
         except Exception as e:

@@ -23,7 +23,7 @@ class NetworkAPI(ControllerBase):
     def _check_auth(self, req):
         """Validates the authentication token."""
         if req.headers.get('Authorization') != self.secret_token:
-            return Response(status=401, body='{"error": "Unauthorized"}', content_type='application/json')
+            return Response(status=401, body='{"error": "Unauthorized"}'.encode('utf-8'), content_type='application/json')
         return None
     
     @route('topology', '/api/topology', methods=['GET'])

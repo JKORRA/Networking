@@ -76,7 +76,7 @@ def background_thread(socketio):
                 logging.error(f"Background poll error: {e}")
                 socketio.emit('status', {'error': f'Poll failed: {str(e)}'})
 
-            time.sleep(5)
+            time.sleep(1)
 
 def get_last_payload():
     """Accessor for the most recent payload to serve immediately to newly connected clients."""

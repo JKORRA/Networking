@@ -49,8 +49,8 @@ class DigitalTwinTopo(Topo):
                 switch_name = f"twin_s{dpid_int}"
                 
                 self.switch_map[dpid_int] = switch_name
-                # Switch uses failMode='secure' so it relies purely on the mirrored OpenFlow table
-                self.addSwitch(switch_name, dpid=dpid_hex, failMode='secure')
+                # Switch will securely connect to the Shadow Controller
+                self.addSwitch(switch_name, dpid=dpid_hex)
                 info(f"    Added switch {switch_name} (dpid: {dpid_hex})\n")
     
     def _analyze_switch_links(self):

@@ -148,29 +148,23 @@ if [ "$(echo "$PYTHON_VERSION >= 3.12" | bc 2>/dev/null)" = "1" ] 2>/dev/null; t
     print_warn "If you encounter issues, use Python 3.11 or earlier."
 fi
 
-VENV_PYTHON="$PROJECT_DIR/venv/bin/python3"
-if [ -f "$VENV_PYTHON" ] && "$VENV_PYTHON" -c "import flask" 2>/dev/null; then
-    print_ok "Flask found (venv)"
-    DASHBOARD_PYTHON="$VENV_PYTHON"
-elif python3 -c "import flask" 2>/dev/null; then
-    print_ok "Flask found (system)"
-    DASHBOARD_PYTHON="python3"
-else
-    print_warn "Flask not installed. Dashboard won't work."
-    print_warn "Install with: ./venv/bin/pip install flask"
-    DASHBOARD_PYTHON="python3"
-fi
+print_step "Setting up virtual environment..."
 
-# Verify venv has all required packages
-if [ "$DASHBOARD_PYTHON" = "$VENV_PYTHON" ]; then
-    if ! "$VENV_PYTHON" -c "import flask_socketio" 2>/dev/null; then
-        print_warn "Missing venv dependencies. Installing..."
-        "$VENV_PYTHON" -m pip install -r "$PROJECT_DIR/requirements.txt" --quiet
-        print_ok "Dependencies installed"
-    else
-        print_ok "All venv dependencies verified"
+# Ensure the venv has access to the system mininet package
+if [ -d "$PROJECT_DIR/venv" ]; then
+    if ! "$PROJECT_DIR/venv/bin/python3" -c "import mininet" 2>/dev/null; then
+        print_warn "Existing venv lacks mininet access. Recreating with --system-site-packages..."
+        rm -rf "$PROJECT_DIR/venv"
     fi
 fi
+
+if [ ! -d "$PROJECT_DIR/venv" ]; then
+    python3 -m venv --system-site-packages "$PROJECT_DIR/venv"
+fi
+VENV_PYTHON="$PROJECT_DIR/venv/bin/python3"
+"$VENV_PYTHON" -m pip install -r "$PROJECT_DIR/requirements.txt" --quiet
+print_ok "Dependencies installed in venv"
+DASHBOARD_PYTHON="$VENV_PYTHON"
 
 # Build docker image in background if needed
 docker image inspect $DOCKER_IMAGE &> /dev/null || {
@@ -207,8 +201,16 @@ tmux send-keys -t $PANE_PHYS_CTRL "echo '=== PHYSICAL RYU CONTROLLER ===' && doc
 
 wait_for_http "http://localhost:${PHYSICAL_API_PORT}/api/version" "Physical Ryu" || true
 
-# 2. Physical Network (connects to already-running controller)
+# 1.5. Twin Ryu Controller
 tmux split-window -h -t $PANE_PHYS_CTRL -c "$PROJECT_DIR"
+PANE_TWIN_CTRL=$(tmux display-message -p -t $SESSION -F "#{pane_id}")
+tmux select-pane -t $PANE_TWIN_CTRL -T "Twin Ryu Controller"
+tmux send-keys -t $PANE_TWIN_CTRL "echo '=== TWIN RYU CONTROLLER ===' && docker run --rm --network host -v \"$PROJECT_DIR\":/app -w /app -e SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" ${DOCKER_IMAGE} ryu-manager --wsapi-port ${TWIN_API_PORT} --ofp-tcp-listen-port ${TWIN_CTRL_PORT} --observe-links src/controller/ryu_app.py" C-m
+
+wait_for_http "http://localhost:${TWIN_API_PORT}/api/version" "Twin Ryu" || true
+
+# 2. Physical Network (connects to already-running controller)
+tmux split-window -v -t $PANE_PHYS_CTRL -c "$PROJECT_DIR"
 PANE_PHYS_NET=$(tmux display-message -p -t $SESSION -F "#{pane_id}")
 tmux select-pane -t $PANE_PHYS_NET -T "Physical Network (Mininet)"
 tmux send-keys -t $PANE_PHYS_NET "echo '=== PHYSICAL NETWORK ===' && python3 src/network/net.py" C-m
@@ -230,10 +232,10 @@ if [ "$TOPOLOGY_READY" -ne 1 ]; then
 fi
 
 # 3. Digital Twin (fetches from now-ready physical controller)
-tmux split-window -v -t $PANE_PHYS_NET -c "$PROJECT_DIR"
+tmux split-window -v -t $PANE_TWIN_CTRL -c "$PROJECT_DIR"
 PANE_TWIN_NET=$(tmux display-message -p -t $SESSION -F "#{pane_id}")
 tmux select-pane -t $PANE_TWIN_NET -T "Digital Twin (Mininet)"
-tmux send-keys -t $PANE_TWIN_NET "echo '=== DIGITAL TWIN ===' && SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" python3 src/twin/main.py --sync" C-m
+tmux send-keys -t $PANE_TWIN_NET "echo '=== DIGITAL TWIN ===' && sudo SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" \"$VENV_PYTHON\" src/twin/main.py --sync" C-m
 
 # Wait for physical network to have hosts discovered
 print_step "Waiting for hosts to be discovered..."
