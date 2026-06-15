@@ -350,6 +350,27 @@ mininet> link s1 s2 up
 
 The twin will detect and replicate this change as well.
 
+### Dynamically Adding Nodes
+
+To test the Twin's ability to mirror brand new infrastructure dynamically, you can create new switches and hosts at runtime in the physical Mininet CLI. 
+
+Because Open vSwitch port numbering must remain perfectly synchronized with Mininet's internal Python state, you must execute these commands via the Python API (`py`) rather than raw bash `sh ovs-vsctl` hacks.
+
+Copy and paste this exact block of commands into the **Physical Network** terminal:
+
+```python
+py net.addSwitch('s4', dpid='0000000000000004')
+py net.addHost('h4', ip='10.0.0.4/24', mac='00:00:00:00:00:04')
+py net.addLink(net.get('s2'), net.get('s4'))
+py net.addLink(net.get('h4'), net.get('s4'))
+py net.get('s4').start([net.get('c1')])
+py net.get('s2').attach(net.get('s2').intfList()[-1])
+py net.get('h4').configDefault()
+py net.get('h4').cmd('ping -c 1 10.0.0.1 &')
+```
+
+Within a second, the Digital Twin will instantly intercept the new OpenFlow connections, detect the new MAC and DPID via its background ETag polling, and flawlessly mirror `s4` and `h4` into its own isolated namespace!
+
 ---
 
 ## Architecture Details

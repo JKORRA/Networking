@@ -270,7 +270,22 @@ class DigitalTwin:
                         
     def _handle_topology_change(self, old_topology, new_topology): 
         """Replicates live topology changes into the Mininet environment."""
-        # 1. Handle LINK changes
+        # 1. Handle SWITCH additions
+        old_switches = set(old_topology.get('switches', {}).keys())
+        new_switches = set(new_topology.get('switches', {}).keys())
+        
+        added_switches = new_switches - old_switches
+        removed_switches = old_switches - new_switches
+        
+        if added_switches:
+            output(f"Switches ADDED: {len(added_switches)}\n")
+            for dpid in added_switches:
+                output(f"     - s{dpid}\n")
+                self._add_switch_dynamically(dpid)
+
+            self._update_link_map()
+
+        # 2. Handle LINK changes
         old_links = {self._link_key(l) for l in old_topology.get('links', [])}
         new_links = {self._link_key(l) for l in new_topology.get('links', [])}
         
@@ -295,7 +310,7 @@ class DigitalTwin:
                 output(f"     - s{dpid1} (port {port1}) <-> s{dpid2} (port {port2})\n")
                 self._bring_link_up(dpid1, dpid2, port1, port2)
         
-        # 2. Handle HOST changes
+        # 3. Handle HOST changes
         old_hosts = set(old_topology.get('hosts', {}).keys())
         new_hosts = set(new_topology.get('hosts', {}).keys())
         
@@ -310,26 +325,12 @@ class DigitalTwin:
                 output(f"     - {mac} at s{host_info.get('dpid')}\n")
                 self._add_host_dynamically(mac, host_info)
         
-        # 3. Handle SWITCH changes
-        old_switches = set(old_topology.get('switches', {}).keys())
-        new_switches = set(new_topology.get('switches', {}).keys())
-        
-        added_switches = new_switches - old_switches
-        removed_switches = old_switches - new_switches
-        
+        # 4. Handle SWITCH removals
         if removed_switches:
             output(f"Switches REMOVED: {len(removed_switches)}\n")
             for dpid in removed_switches:
                 output(f"     - s{dpid}\n")
                 self._remove_switch_dynamically(dpid)
-                
-        if added_switches:
-            output(f"Switches ADDED: {len(added_switches)}\n")
-            for dpid in added_switches:
-                output(f"     - s{dpid}\n")
-                self._add_switch_dynamically(dpid)
-
-            self._update_link_map()
         
         if added_links or removed_links or added_hosts or added_switches or removed_switches: # Summary
             output(f"\nTwin network updated!\n")
