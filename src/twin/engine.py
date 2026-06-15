@@ -227,12 +227,12 @@ class DigitalTwin:
                 continue
 
             if dst_host.name not in self._iperf_servers:
-                dst_host.cmd('iperf3 -s -D')
+                dst_host.cmd('taskset -c 2,3 iperf3 -s -D')
                 self._iperf_servers.add(dst_host.name)
 
             twin_dst_ip = dst_host.IP()
             duration = SYNC_INTERVAL + 2
-            cmd = f"iperf3 -c {twin_dst_ip} -u -b {mbps}M -t {duration} &"
+            cmd = f"taskset -c 2,3 iperf3 -c {twin_dst_ip} -u -b {mbps}M -t {duration} &"
             result = src_host.cmd(cmd)
             self._track_iperf3_pid(src_host, result)
 

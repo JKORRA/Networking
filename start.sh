@@ -197,7 +197,7 @@ tmux new-session -d -s $SESSION -n "SDN-Twin" -c "$PROJECT_DIR"
 tmux set-option -t $SESSION pane-border-status top
 PANE_PHYS_CTRL=$(tmux display-message -p -t $SESSION -F "#{pane_id}")
 tmux select-pane -t $PANE_PHYS_CTRL -T "Physical Ryu Controller"
-tmux send-keys -t $PANE_PHYS_CTRL "echo '=== PHYSICAL RYU CONTROLLER ===' && docker run --rm --network host -v \"$PROJECT_DIR\":/app -w /app -e SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" ${DOCKER_IMAGE} ryu-manager --observe-links src/controller/ryu_app.py" C-m
+tmux send-keys -t $PANE_PHYS_CTRL "echo '=== PHYSICAL RYU CONTROLLER ===' && docker run --rm --cpuset-cpus=\"0,1\" --network host -v \"$PROJECT_DIR\":/app -w /app -e SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" ${DOCKER_IMAGE} ryu-manager --observe-links src/controller/ryu_app.py" C-m
 
 wait_for_http "http://localhost:${PHYSICAL_API_PORT}/api/version" "Physical Ryu" || true
 
@@ -205,7 +205,7 @@ wait_for_http "http://localhost:${PHYSICAL_API_PORT}/api/version" "Physical Ryu"
 tmux split-window -h -t $PANE_PHYS_CTRL -c "$PROJECT_DIR"
 PANE_TWIN_CTRL=$(tmux display-message -p -t $SESSION -F "#{pane_id}")
 tmux select-pane -t $PANE_TWIN_CTRL -T "Twin Ryu Controller"
-tmux send-keys -t $PANE_TWIN_CTRL "echo '=== TWIN RYU CONTROLLER ===' && docker run --rm --network host -v \"$PROJECT_DIR\":/app -w /app -e SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" ${DOCKER_IMAGE} ryu-manager --wsapi-port ${TWIN_API_PORT} --ofp-tcp-listen-port ${TWIN_CTRL_PORT} --observe-links src/controller/ryu_app.py" C-m
+tmux send-keys -t $PANE_TWIN_CTRL "echo '=== TWIN RYU CONTROLLER ===' && docker run --rm --cpuset-cpus=\"2,3\" --network host -v \"$PROJECT_DIR\":/app -w /app -e SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" ${DOCKER_IMAGE} ryu-manager --wsapi-port ${TWIN_API_PORT} --ofp-tcp-listen-port ${TWIN_CTRL_PORT} --observe-links src/controller/ryu_app.py" C-m
 
 wait_for_http "http://localhost:${TWIN_API_PORT}/api/version" "Twin Ryu" || true
 
@@ -213,7 +213,7 @@ wait_for_http "http://localhost:${TWIN_API_PORT}/api/version" "Twin Ryu" || true
 tmux split-window -v -t $PANE_PHYS_CTRL -c "$PROJECT_DIR"
 PANE_PHYS_NET=$(tmux display-message -p -t $SESSION -F "#{pane_id}")
 tmux select-pane -t $PANE_PHYS_NET -T "Physical Network (Mininet)"
-tmux send-keys -t $PANE_PHYS_NET "echo '=== PHYSICAL NETWORK ===' && python3 src/network/net.py" C-m
+tmux send-keys -t $PANE_PHYS_NET "echo '=== PHYSICAL NETWORK ===' && taskset -c 0,1 python3 src/network/net.py" C-m
 
 # Wait for physical network to be discovered (topology version >= 1)
 print_step "Waiting for physical network topology..."
@@ -235,7 +235,7 @@ fi
 tmux split-window -v -t $PANE_TWIN_CTRL -c "$PROJECT_DIR"
 PANE_TWIN_NET=$(tmux display-message -p -t $SESSION -F "#{pane_id}")
 tmux select-pane -t $PANE_TWIN_NET -T "Digital Twin (Mininet)"
-tmux send-keys -t $PANE_TWIN_NET "echo '=== DIGITAL TWIN ===' && sudo SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" \"$VENV_PYTHON\" src/twin/main.py --sync" C-m
+tmux send-keys -t $PANE_TWIN_NET "echo '=== DIGITAL TWIN ===' && taskset -c 2,3 sudo SDN_TWIN_AUTH_TOKEN=\"$SDN_TWIN_AUTH_TOKEN\" \"$VENV_PYTHON\" src/twin/main.py --sync" C-m
 
 # Wait for physical network to have hosts discovered
 print_step "Waiting for hosts to be discovered..."

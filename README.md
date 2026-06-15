@@ -39,30 +39,34 @@ The system exploits the **Ryu Northbound REST API** to retrieve topology and tra
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
-│                        Linux Host Machine                         │
-│                                                                   │
+│                        Linux Host Machine                          │
+│                                                                    │
 │  ┌────────────────────────┐    ┌────────────────────────────────┐  │
 │  │   Physical Network     │    │        Digital Twin            │  │
+│  │    (CPU Cores 0,1)     │    │       (CPU Cores 2,3)          │  │
 │  │                        │    │                                │  │
-│  │  h1 ── s1 ── s2 ── s3 │    │  th1 ── ts1 ── ts2 ── ts3     │  │
+│  │  h1 ── s1 ── s2 ── s3  │    │  th1 ── ts1 ── ts2 ── ts3      │  │
 │  │        │         │     │    │         │           │          │  │
 │  │       h2        h3     │    │        th2         th3         │  │
-│  │                        │    │                                │  │
-│  │  IPs: 10.0.0.x/24     │    │  IPs: 10.0.0.x/24             │  │
-│  │  MACs: 00:00:00:...   │    │  MACs: 00:00:00:...           │  │
 │  └───────────┬────────────┘    └──────────────┬─────────────────┘  │
 │              │                                │                    │
-│       ┌──────┴──────┐                                             │
-│       │ Ryu Ctrl #1 │                                             │
-│       │ (Docker)    │                                             │
-│       │ Port 6633   │                                             │
-│       │ API: 8080   │                                             │
-│       └──────┬──────┘                                             │
+│       ┌──────┴──────┐                  ┌──────┴──────┐             │
+│       │ Phys Ryu #1 │                  │ Twin Ryu #2 │             │
+│       │ (Cores 0,1) │                  │ (Cores 2,3) │             │
+│       │ Port 6633   │                  │ Port 6634   │             │
+│       │ API: 8080   │                  │ API: 8081   │             │
+│       └──────┬──────┘                  └─────────────┘             │
+│              │                                ▲                    │
+│              │       ┌────────────────┐       │                    │
+│              ├──────►│   Twin Engine  ├───────┘                    │
+│              │       │  (Cores 2,3)   │                            │
+│              │       │  ETag Polling  │                            │
+│              │       └────────────────┘                            │
 │              │                                                     │
-│       ┌──────┴──────┐                                             │
-│       │  Dashboard  │  ◄── Fetches /api/topology + /api/traffic   │
-│       │  Flask:5000 │                                             │
-│       └─────────────┘                                             │
+│       ┌──────┴──────┐                                              │
+│       │  Dashboard  │  ◄── Fetches /api/topology + /api/traffic    │
+│       │  Flask:5000 │                                              │
+│       └─────────────┘                                              │
 └────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -73,13 +77,12 @@ The system exploits the **Ryu Northbound REST API** to retrieve topology and tra
 | Feature | Description |
 |---|---|
 | **Automated Topology Replication** | Fetches real-time switch, link, and host data via Ryu REST API and builds an identical Mininet clone |
-| **True Control-Plane Mirroring** | Twin switches operate entirely in `failMode=secure` without a local SDN controller. They passively mirror the physical network by dynamically injecting raw OpenFlow rules via `ovs-ofctl dump-flows/replace-flows`. |
+| **Shadow Controller Mirroring** | Twin switches connect to their own isolated Twin Ryu Controller. This provides true Control-Plane autonomy, allowing the Twin to independently process Packet-In events while inheriting physical routing policy via shared volume mounts. |
 | **IP & MAC Fidelity** | The twin uses identically sorted MACs and IP addresses (`10.0.0.x`), leveraging strict Mininet network namespaces for 100% data-plane replication accuracy. |
-| **Traffic Monitoring** | Polls OpenFlow `OFPPortStatsRequest` and `OFPFlowStatsRequest` to calculate real-time Rx/Tx Mbps per port and per flow. |
-| **Flow-Based Emulation** | Detects active end-to-end IP flows >1 Mbps and auto-spawns exact `iperf3` client/server replicas between twin hosts. |
-| **Dynamic Topology Sync** | Background thread detects topology changes (link up/down, new hosts). The Twin dynamically stitches new physical interfaces at runtime using identical Mininet port numbers. |
-| **Web Dashboard** | Real-time WebSocket (Socket.IO) dashboard with interactive nodes, live event logs, active flows table, and traffic heatmaps |
-| **ETag Caching** | High-frequency API polling (2s interval) optimized by zero-payload `304 Not Modified` responses to virtually eliminate control-plane overhead |
+| **Hardware Isolation** | Employs `cgroups` (`--cpuset-cpus` and `taskset`) to physically partition CPU cores, preventing Twin traffic emulation from causing context-switching latency in the Physical network (solving the "Observer Effect"). |
+| **Flow-Based Emulation** | Detects active IP flows >1 Mbps and auto-spawns exact `iperf3` client/server replicas between twin hosts. Emulation is restricted to the Top 5 heaviest flows to protect host CPU limits. |
+| **High-Frequency ETag Telemetry** | Twin Engine independently runs a decoupled 1-second polling loop using `304 Not Modified` ETag caching to detect topology changes instantly with near-zero overhead. |
+| **Web Dashboard** | Real-time WebSocket (Socket.IO) dashboard with dark mode glassmorphism, interactive nodes, live event logs, active flows table, and traffic heatmaps. |
 | **Bearer Authentication** | Enforces secure access for all Northbound REST API endpoints, the dashboard, and external twin integrations |
 | **Emulation Capacity Caps** | Intelligently limits `iperf3` concurrent flow emulation to only the Top N heaviest flows to protect host CPU and prevent namespace resource starvation |
 | **Teardown Orchestration** | Strict shutdown sequence that explicitly detects and kills all trailing user-space daemons (`iperf3`), containers, and Mininet artifacts on exit |
@@ -123,9 +126,9 @@ The system exploits the **Ryu Northbound REST API** to retrieve topology and tra
   - REST API endpoints via `api.py`: `/api/topology`, `/api/switches`, `/api/links`, `/api/hosts`, `/api/traffic`, `/api/version`
 
 - **`src/twin/` Modules** — The main Digital Twin engine:
-  - `api_client.py` fetches the physical topology via REST API
-  - `topology.py` builds an isolated Mininet replica with 100% identical IPs, MACs, and port mappings
-  - `engine.py` runs a background synchronization loop dynamically cloning physical OpenFlow tables into the twin kernel (`ovs-ofctl`)
+  - `api_client.py` fetches the physical topology via ETag-cached REST API
+  - `topology.py` builds an isolated Mininet replica natively bound to a Shadow Controller
+  - `engine.py` runs an independent 1-second background telemetry loop handling topology and flow updates
   - `main.py` serves as the CLI launcher
 
 - **`src/dashboard/` Modules** — The Flask application components:
@@ -133,12 +136,12 @@ The system exploits the **Ryu Northbound REST API** to retrieve topology and tra
   - `utils.py` compares topological states for live event alerts.
   - `app.py` serves the web dashboard endpoints.
 
-- **`src/dashboard/templates/index.html`** — Interactive graph visualization using [vis-network](https://visjs.github.io/vis-network/docs/network/). Edges are color-coded based on traffic:
+- **`src/dashboard/templates/index.html`** — Stunning Glassmorphic Dark Mode visualization using [vis-network](https://visjs.github.io/vis-network/docs/network/). Edges are dynamically colored:
   - 🟢 Green: < 40% Link Utilization
   - 🟡 Yellow: 40% - 80% Link Utilization
   - 🔴 Red: > 80% Link Utilization
 
-- **`start.sh`** — Automated orchestration script that uses Tmux to launch all components in isolated panes cleanly, managing dependencies, automated browser launching, and cleanup on exit via `--stop`.
+- **`start.sh`** — Automated orchestration script leveraging Tmux and CPU Pinning (`taskset`/`--cpuset-cpus`) to launch all 5 components in strictly isolated hardware constraints.
 
 ---
 
