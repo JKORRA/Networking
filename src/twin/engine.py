@@ -12,7 +12,6 @@ import time
 import heapq
 import threading
 import subprocess
-import socketio
 from mininet.net import Mininet
 from mininet.node import Host, RemoteController
 from mininet.cli import CLI
@@ -22,7 +21,7 @@ from mininet.link import TCLink
 from topology import DigitalTwinTopo
 from api_client import _fetch_json, _fetch_json_cached, FLOWS_ENDPOINT, TOPOLOGY_ENDPOINT, RYU_URL
 
-SYNC_INTERVAL = 5
+SYNC_INTERVAL = 1
 CONTROLLER_IP = '127.0.0.1'
 CONTROLLER_PORT = 6634
 
@@ -158,7 +157,7 @@ class DigitalTwin:
         info('\n')
     
     def start_sync(self):
-        """Starts the WebSocket client to react instantly to topology and flow updates."""
+        """Starts the background thread to continuously sync topology and flows via direct ETag polling."""
         if not self.enable_sync:
             return
             
@@ -169,38 +168,33 @@ class DigitalTwin:
         self.running = True
         self.sync_thread = threading.Thread(target=self._sync_loop, daemon=True)
         self.sync_thread.start()
-        info("Started event-driven topology synchronization (WebSocket)\n")
-        info("Twin will instantly replicate: Link changes, New hosts, Traffic\n")
+        info(f"Started high-frequency topology synchronization (interval: {SYNC_INTERVAL}s)\n")
+        info("Twin will independently replicate: Link changes, New hosts, Traffic\n")
         info("Sync runs in background - you can still use the CLI!\n\n")
     
     def _sync_loop(self):
-        """Background thread loop: connects to Dashboard via Socket.IO for event-driven updates."""
-        sio = socketio.Client()
+        """Background thread loop: fetches APIs and drives Twin updates independently."""
         last_version = self.topology_data.get('version', 0)
+        last_etag = str(last_version)
         
-        @sio.on('connect')
-        def on_connect():
-            info("Connected to Dashboard WebSocket\n")
-            
-        @sio.on('disconnect')
-        def on_disconnect():
-            info("Disconnected from Dashboard WebSocket\n")
-            
-        @sio.on('update_data')
-        def on_update_data(data):
-            if not self.running:
-                return
-            
+        while self.running:
             try:
-                # 1. Emulate Traffic
-                flows = data.get('flows', {})
-                self._handle_traffic(flows)
+                # Fetch traffic stats directly from Ryu
+                traffic_data = _fetch_json(FLOWS_ENDPOINT, RYU_URL, timeout=5)
+                if traffic_data:
+                    self._handle_traffic(traffic_data)
                 
-                # 2. Topology Changes
-                new_topology = data.get('topology', {})
+                # Fetch latest topology efficiently using ETag caching directly from Ryu
+                topology_data, new_etag = _fetch_json_cached(TOPOLOGY_ENDPOINT, RYU_URL, timeout=5, etag=last_etag)
+                
+                if topology_data == "NOT_MODIFIED" or not topology_data:
+                    continue # ETag matched (no changes) or error
+                
+                new_topology = topology_data
+                last_etag = new_etag
                 new_version = new_topology.get('version', 0)
                 
-                nonlocal last_version
+                # Check if topology changed
                 if new_version > last_version:
                     output(f"\n!!!TOPOLOGY CHANGE DETECTED!!! (v{last_version} -> v{new_version})\n")
                     self._handle_topology_change(self.topology_data, new_topology)
@@ -209,17 +203,9 @@ class DigitalTwin:
                     last_version = new_version
                     
             except Exception as e:
-                error(f"WebSocket sync error: {e}\n")
-
-        try:
-            # We connect to the dashboard's websocket server
-            sio.connect('http://localhost:5000', wait_timeout=10)
-            while self.running:
-                time.sleep(1) # Keep thread alive
-        except Exception as e:
-            error(f"Failed to connect to Dashboard WebSocket: {e}\n")
-        finally:
-            sio.disconnect()
+                error(f"ETag sync error: {e}\n")
+            finally:
+                time.sleep(SYNC_INTERVAL)
     
     def _handle_traffic(self, flow_matrix):
         """Spawns iperf3 to emulate detected traffic flow rates."""
