@@ -324,6 +324,24 @@ class DigitalTwin:
                 host_info = new_topology['hosts'][mac]
                 output(f"     - {mac} at s{host_info.get('dpid')}\n")
                 self._add_host_dynamically(mac, host_info)
+                
+        # UPDATE existing hosts (IPv4 Reconciliation Loop)
+        common_hosts = new_hosts & old_hosts
+        updated_hosts_count = 0
+        for mac in common_hosts:
+            old_ipv4 = old_topology['hosts'][mac].get('ipv4')
+            new_ipv4 = new_topology['hosts'][mac].get('ipv4')
+            
+            if new_ipv4 and new_ipv4 != 'None' and new_ipv4 != old_ipv4:
+                host = self.created_hosts.get(mac)
+                if host:
+                    ip_with_mask = new_ipv4 if '/' in new_ipv4 else f"{new_ipv4}/24"
+                    host.setIP(ip_with_mask)
+                    
+                    physical_ip = new_ipv4.split('/')[0]
+                    self.created_hosts[physical_ip] = host
+                    output(f"  Reconciled IPv4 for host {mac}: {old_ipv4} -> {new_ipv4}\n")
+                    updated_hosts_count += 1
         
         # 4. Handle SWITCH removals
         if removed_switches:
@@ -332,7 +350,7 @@ class DigitalTwin:
                 output(f"     - s{dpid}\n")
                 self._remove_switch_dynamically(dpid)
         
-        if added_links or removed_links or added_hosts or added_switches or removed_switches: # Summary
+        if added_links or removed_links or added_hosts or updated_hosts_count > 0 or added_switches or removed_switches: # Summary
             output(f"\nTwin network updated!\n")
     
     def _bring_link_down(self, dpid1, dpid2):

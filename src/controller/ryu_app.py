@@ -178,10 +178,14 @@ class NetworkController(app_manager.RyuApp):
             arp_pkt = pkt.get_protocol(arp.arp)
             ip_pkt = pkt.get_protocol(ipv4_pkt.ipv4)
             if arp_pkt is not None:
-                self.mac_to_ip[arp_pkt.src_mac] = arp_pkt.src_ip
+                if self.mac_to_ip.get(arp_pkt.src_mac) != arp_pkt.src_ip:
+                    self.mac_to_ip[arp_pkt.src_mac] = arp_pkt.src_ip
+                    self._schedule_topology_update()
                 self.mac_to_ip_ts[arp_pkt.src_mac] = time.time()
             elif ip_pkt is not None:
-                self.mac_to_ip[src] = ip_pkt.src
+                if self.mac_to_ip.get(src) != ip_pkt.src:
+                    self.mac_to_ip[src] = ip_pkt.src
+                    self._schedule_topology_update()
                 self.mac_to_ip_ts[src] = time.time()
             
             if dst in self.mac_to_port[dpid]:
@@ -275,11 +279,8 @@ class NetworkController(app_manager.RyuApp):
         datapath.send_msg(flow_req)
 
     def _refresh_host_ips(self):
-        """Supplements missing host IPs from learned mac_to_ip mappings."""
-        hosts = self.topology.get('hosts', {})
-        for mac, host_info in hosts.items():
-            if host_info.get('ipv4') is None and mac in self.mac_to_ip:
-                host_info['ipv4'] = self.mac_to_ip[mac]
+        """Deprecated: IPs are now updated via _schedule_topology_update to ensure ETag invalidation."""
+        pass
 
     @set_ev_cls(ofp_event.EventOFPPortStatsReply, MAIN_DISPATCHER)
     def _port_stats_reply_handler(self, ev):
