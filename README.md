@@ -1,4 +1,4 @@
-# Hybrid Digital Twin for SDN Networks
+# Digital Twin for SDN Networks
 
 A fully automated system that generates a real-time **Digital Twin** of an SDN network. The twin replicates the physical topology, mirrors traffic loads, and visualizes everything through an interactive web dashboard with live traffic heatmaps.
 
