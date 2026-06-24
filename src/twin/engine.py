@@ -233,6 +233,10 @@ class DigitalTwin:
             twin_dst_ip = dst_host.IP()
             duration = SYNC_INTERVAL + 2
             cmd = f"taskset -c 2,3 iperf3 -c {twin_dst_ip} -u -b {mbps}M -t {duration} &"
+            
+            output(f"\n[Twin Engine] Flow detected: {src_ip} -> {dst_ip} ({mbps} Mbps)\n")
+            output(f"              Spawning iperf3 in twin namespace on Cores 2 & 3\nmininet> ")
+            
             result = src_host.cmd(cmd)
             self._track_iperf3_pid(src_host, result)
 
