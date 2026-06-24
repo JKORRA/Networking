@@ -1,7 +1,3 @@
-
-
-https://github.com/user-attachments/assets/736af95b-5ccf-4b42-829a-ee65a2173cc0
-
 # Digital Twin for SDN Networks
 
 A fully automated system that generates a real-time **Digital Twin** of an SDN network. The twin replicates the physical topology, mirrors traffic loads, and visualizes everything through an interactive web dashboard with live traffic heatmaps.
