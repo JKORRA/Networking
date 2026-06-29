@@ -163,9 +163,11 @@ The system exploits the **Ryu Northbound REST API** to retrieve topology and tra
 
 ---
 
-## Setup
+## Getting Started
 
-### 1. System Dependencies
+### 1. System Dependencies (Required for both methods)
+
+You must install these system packages first before proceeding.
 
 ```bash
 sudo apt update
@@ -185,34 +187,13 @@ sudo usermod -aG docker $USER
 # Log out and back in for this to take effect, or use sudo for docker commands
 ```
 
-### 2. Docker Image for Ryu (Required)
-
-Build the custom Ryu Docker image. This only needs to be done **once**:
-
-```bash
-sudo docker build -t my-ryu -f Dockerfile.ryu .
-```
-
-This creates a lightweight image (~250 MB) with Python 3.9, a compatible `setuptools`, `eventlet==0.30.2`, and `ryu==4.34`.
-
-### 3. Python Dependencies
-
-If running manually without `start.sh`, install the required Python packages in a virtual environment (using `--system-site-packages` so Mininet remains accessible):
-
-```bash
-python3 -m venv --system-site-packages venv
-./venv/bin/pip install -r requirements.txt
-```
-
-The Mininet Python library is installed system-wide by the `mininet` apt package; it does **not** need to be installed via pip.
-
 ---
 
-## Execution
-
-### Automated Launch (Recommended)
+## 🚀 Option A: Automated Setup & Execution (Recommended)
 
 The easiest way to run the entire project is using the automated `start.sh` script, which orchestrates all 5 components in a single `tmux` session with split panes.
+
+This script will **automatically** handle creating the Python virtual environment, installing dependencies, and building the Ryu Docker image.
 
 ```bash
 sudo ./start.sh
@@ -228,11 +209,33 @@ To detach from the tmux session, press `Ctrl+B` then `d`.
 To re-attach, run `tmux attach -t sdn-twin`.
 To stop everything, run `sudo ./start.sh --stop`.
 
-### Manual Execution
+---
 
-If you prefer to run things manually, open **5 separate terminal windows/tabs** and run the commands in the following order.
+## 🛠 Option B: Manual Setup & Execution
 
-### Step 1 — Start the Physical Network
+If you prefer to run things manually, you must first complete the environment setup, and then launch the 5 separate terminal windows/tabs.
+
+### Manual Setup Steps
+
+**1. Build the Docker Image for Ryu (Required once)**
+```bash
+sudo docker build -t my-ryu -f Dockerfile.ryu .
+```
+*(This creates a lightweight image (~250 MB) with Python 3.9, a compatible `setuptools`, `eventlet==0.30.2`, and `ryu==4.34`.)*
+
+**2. Python Dependencies**
+Install the required Python packages in a virtual environment (using `--system-site-packages` so Mininet remains accessible):
+```bash
+python3 -m venv --system-site-packages venv
+./venv/bin/pip install -r requirements.txt
+```
+*(The Mininet Python library is installed system-wide by the `mininet` apt package; it does **not** need to be installed via pip.)*
+
+### Manual Execution Steps
+
+Open **5 separate terminal windows/tabs** and run the commands in the following order:
+
+#### Step 1 — Start the Physical Network
 
 ```bash
 sudo python3 src/network/net.py
@@ -240,7 +243,7 @@ sudo python3 src/network/net.py
 
 Wait for the `mininet>` prompt to appear. This means the 3 switches and 3 hosts are running.
 
-### Step 2 — Start the Physical Ryu Controller
+#### Step 2 — Start the Physical Ryu Controller
 
 ```bash
 sudo docker run -it --network host -v $(pwd):/app -w /app my-ryu ryu-manager --observe-links src/controller/ryu_app.py
@@ -253,9 +256,10 @@ Switch datapath id 2 CONNECTED
 Switch datapath id 3 CONNECTED
 ```
 
-### Step 3 — Start the Digital Twin
+#### Step 3 — Start the Digital Twin
 
 ```bash
+# If using a venv, ensure you use the venv's python executable
 sudo python3 src/twin/main.py --sync
 ```
 
@@ -270,7 +274,7 @@ Building digital twin topology...
 Started topology synchronization (interval: 10s)
 ```
 
-### Step 4 — Start the Web Dashboard
+#### Step 4 — Start the Web Dashboard
 
 ```bash
 cd src/dashboard && python3 app.py
@@ -278,7 +282,7 @@ cd src/dashboard && python3 app.py
 cd src/dashboard && ../../venv/bin/python3 app.py
 ```
 
-If you use `start.sh`, the dashboard will automatically open in your browser when ready. Otherwise, open your browser and navigate to: **http://localhost:5000**
+Open your browser and navigate to: **http://localhost:5000**
 
 ---
 
