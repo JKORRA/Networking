@@ -157,7 +157,7 @@ The system exploits the **Ryu Northbound REST API** to retrieve topology and tra
 | **Docker** | Runs the Ryu controller in an isolated Python 3.9 environment |
 | **iperf3** | Traffic generation for load emulation |
 | **Python 3** (system) | Runs `net.py`, `twin.py`, and `dashboard.py` natively |
-| **Flask** | Web dashboard backend |
+| **tmux** | Required by `start.sh` for multi-pane terminal orchestration |
 
 > **Why Docker?** The Ryu SDN framework was abandoned in 2017 and is incompatible with Python ≥ 3.12 due to removed `distutils` and `setuptools` internals. Docker isolates Ryu in a Python 3.9 container while the rest of the project runs natively.
 
@@ -169,7 +169,7 @@ The system exploits the **Ryu Northbound REST API** to retrieve topology and tra
 
 ```bash
 sudo apt update
-sudo apt install -y mininet openvswitch-switch iperf3 docker.io
+sudo apt install -y mininet openvswitch-switch iperf3 docker.io tmux
 ```
 
 Start the Open vSwitch service:
@@ -197,15 +197,11 @@ This creates a lightweight image (~250 MB) with Python 3.9, a compatible `setupt
 
 ### 3. Python Dependencies
 
-Install Flask for the dashboard (in a virtual environment or system-wide):
+If running manually without `start.sh`, install the required Python packages in a virtual environment (using `--system-site-packages` so Mininet remains accessible):
 
 ```bash
-# Option A: Using a virtual environment
-python3 -m venv venv
-./venv/bin/pip install flask
-
-# Option B: System-wide
-pip3 install flask
+python3 -m venv --system-site-packages venv
+./venv/bin/pip install -r requirements.txt
 ```
 
 The Mininet Python library is installed system-wide by the `mininet` apt package; it does **not** need to be installed via pip.
