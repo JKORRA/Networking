@@ -240,9 +240,6 @@ class DigitalTwin:
             result = src_host.cmd(cmd)
             self._track_iperf3_pid(src_host, result)
 
-    # Note: _sync_flow_tables has been removed because the Shadow Controller 
-    # now handles all flow programming autonomously.
-
     def _track_iperf3_pid(self, host, cmd_output):
         """Tracks the PIDs of spawned iperf3 processes."""
         pids = []

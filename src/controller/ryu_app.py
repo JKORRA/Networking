@@ -244,13 +244,12 @@ class NetworkController(app_manager.RyuApp):
         self.update_topology()
 
     def _monitor(self):
-        """Background thread to poll port and flow stats."""
+        """Background thread to poll port and flow stats. -- this will be exposed on the API"""
         while True:
             # Optionally clear inactive flows
             self.flow_matrix.clear()
             for dp in self.datapaths.values():
                 self._request_stats(dp)
-            self._refresh_host_ips() # Supplement IPs without changing version
 
             # Prune stale mac_to_port entries (older than 300s)
             now = time.time()
@@ -277,10 +276,6 @@ class NetworkController(app_manager.RyuApp):
         
         flow_req = parser.OFPFlowStatsRequest(datapath)
         datapath.send_msg(flow_req)
-
-    def _refresh_host_ips(self):
-        """Deprecated: IPs are now updated via _schedule_topology_update to ensure ETag invalidation."""
-        pass
 
     @set_ev_cls(ofp_event.EventOFPPortStatsReply, MAIN_DISPATCHER)
     def _port_stats_reply_handler(self, ev):
