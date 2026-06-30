@@ -189,7 +189,7 @@ sudo usermod -aG docker $USER
 
 ---
 
-## 🚀 Option A: Automated Setup & Execution (Recommended)
+## Option A: Automated Setup & Execution (Recommended)
 
 The easiest way to run the entire project is using the automated `start.sh` script, which orchestrates all 5 components in a single `tmux` session with split panes.
 
@@ -211,7 +211,7 @@ To stop everything, run `sudo ./start.sh --stop`.
 
 ---
 
-## 🛠 Option B: Manual Setup & Execution
+## Option B: Manual Setup & Execution
 
 If you prefer to run things manually, you must first complete the environment setup, and then launch the 5 separate terminal windows/tabs.
 
